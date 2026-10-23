@@ -1,28 +1,30 @@
 """Kiểm thử bản mod (không cần mở game).
 
     python mod_src/verify_mod.py [--original GameAssembly.dll.bak] [--legacy duong_dan_dll_mod_v1]
-                                 [--old-v2 duong_dan_dll_v2_cu]
+                                 [--old-v2 dll_v2_cu [dll_v2_cu ...]]
 
-1. Dựng DLL cho mọi tổ hợp tính năng, nhận diện lại đúng tính năng và khôi phục
-   được bản gốc (SHA-256); gỡ được patch "0.3s" đã bỏ khỏi DLL cũ.
-2. Khôi phục bản gốc từ bản mod cũ v1.
-3. Cấu trúc PE: section mới, SizeOfImage, .pdata sắp xếp đúng.
-4. Disassemble: mọi lệnh nhảy/gọi trong cave trỏ tới địa chỉ đã biết, đích nhảy
-   về ranh giới lệnh của hàm game, sau lệnh call không có mẫu epilogue.
-5. (Windows) Nạp DLL thật bằng LoadLibraryEx: quyền trang nhớ RX/RW, tra
-   RtlLookupFunctionEntry, và RtlVirtualUnwind từ trong cave phải cho cùng kết
-   quả như unwind tại vị trí hook gốc.
-6. Chạy THẬT mã máy stone_tick (luyện đá) với hàm game thay bằng callback Python và
-   nhân vật / hành trang / bảng điểm đá giả: kiểm tra packet gửi ra ở từng tình huống.
-7. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
-8. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, thêm/bớt, restore.
-9. (--old-v2) Nâng cấp DLL v2 dựng bằng payload cũ hơn.
+ 1. Cài mod: nhận diện bản v3, mọi tính năng mặc định tắt, khôi phục được bản gốc
+    (SHA-256); gỡ được patch "0.3s" đã bỏ khỏi DLL cũ.
+ 2. Khôi phục bản gốc từ bản mod cũ v1.
+ 3. Cấu trúc PE: section mới, SizeOfImage, .pdata sắp xếp đúng.
+ 4. Disassemble mọi khối code (cave asm, hàm C) và hook: lệnh nhảy/gọi trỏ tới địa
+    chỉ đã biết, đích nhảy về đầu lệnh của hàm game, không ai nhảy vào giữa vùng đã
+    thay, sau lệnh call trong asm không có mẫu epilogue.
+ 5. (Windows) Nạp DLL thật bằng LoadLibraryEx: quyền trang nhớ, RtlLookupFunctionEntry
+    cho mọi khối, RtlVirtualUnwind từ trong cave = unwind tại vị trí hook gốc.
+ 6. Chạy THẬT các cave chặn theo cờ (qua trampoline): cờ tắt -> đi đúng đường của lệnh
+    gốc, cờ bật -> hành vi của mod.
+ 7. Chạy THẬT menu "Mod HVNJ" (hvnj_menu.c): hiện menu, tick, lưu / đọc PlayerPrefs,
+    dòng "Mod HVNJ" trong menu nhân vật, lệnh của game vẫn tới mo.djh.
+ 8. Chạy THẬT stone_tick (luyện đá) với nhân vật / hành trang giả.
+ 9. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
+10. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, lệnh cũ, restore.
+11. (--old-v2) Nâng cấp DLL v2 cũ (chọn tính năng bằng script) lên bản menu.
 """
 import argparse
 import ctypes
 import hashlib
 import importlib.util
-import itertools
 import os
 import shutil
 import struct
@@ -44,6 +46,9 @@ B = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(B)
 
 FAILS = []
+CFG_TOGGLES = ["cfg_mob", "cfg_die", "cfg_trial", "cfg_stage", "cfg_quest", "cfg_tathu", "cfg_party",
+               "cfg_stone"]             # thứ tự dòng tick trong menu (hvnj_menu.c)
+ACT = 0x48560000                        # MOD_ACT_BASE
 
 
 def check(cond, msg):
@@ -71,9 +76,21 @@ def insn_starts(data, start, end):
     return {i.address for i in disasm(data, start, end - start)}
 
 
+def kernel32():
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.LoadLibraryExW.restype = ctypes.c_void_p
+    k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
+    k32.FreeLibrary.argtypes = [ctypes.c_void_p]
+    k32.VirtualProtect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    k32.VirtualAlloc.restype = ctypes.c_void_p
+    k32.VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32]
+    k32.VirtualFree.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
+    return k32
+
+
 # ----------------------------------------------------------------------------- 1, 2
 def with_retired_skill(data):
-    """Mô phỏng DLL v2 cũ còn patch 'tốc độ ra chiêu 0.3s' (đã gỡ)."""
+    """Mô phỏng DLL cũ còn patch 'tốc độ ra chiêu 0.3s' (đã gỡ)."""
     buf = bytearray(data)
     for rva, _o, n in P.RETIRED_PATCHES["skill"]:
         off = P.rva_to_off(buf, rva)
@@ -85,39 +102,25 @@ def skill_is_original(data):
     return all(P.read_at(data, rva, len(o) // 2) == bytes.fromhex(o) for rva, o, _n in P.RETIRED_PATCHES["skill"])
 
 
-def test_combinations(orig):
-    print(f"[1] Dựng {2 ** len(P.FEATURES)} tổ hợp tính năng")
-    for r in range(len(P.FEATURES) + 1):
-        for combo in itertools.combinations(P.FEATURES, r):
-            feats = set(combo)
-            out = P.build(orig, feats, 3)
-            on, accept, _kind = P.detect(out)
-            check(on == feats, f"detect {sorted(feats)} -> {sorted(on)}")
-            if feats & set(P.PAYLOAD_FEATURES):
-                check(accept == 3, f"cfg_accept {sorted(feats)}")
-            rec = P.strip_payload(out) if P.has_payload(out) else P.strip_legacy(out)
-            check(sha(rec) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)}")
-            check(skill_is_original(out), f"patch 0.3s đã gỡ vẫn còn trong {sorted(feats)}")
-            check(P.has_payload(out) == bool(feats & set(P.PAYLOAD_FEATURES)), f"payload {sorted(feats)}")
-            if P.has_payload(out):
-                cfg = P.rva_to_off(out, P.PAYLOAD_DATA_RVA)
-                for f in P.PAYLOAD_FEATURES:
-                    check(out[cfg + P.PAYLOAD_CFG["cfg_" + f]] == (f in feats), f"cfg_{f} trong {sorted(feats)}")
-                for g, users in P.PAYLOAD_HOOK_USERS.items():
-                    want = bool(feats & set(users))
-                    got = all(P.read_at(out, rva, len(n) // 2) == bytes.fromhex(n) for rva, _o, n in P.PAYLOAD_HOOKS[g])
-                    check(got == want, f"nhóm hook {g} trong {sorted(feats)}")
-            old = with_retired_skill(out)
-            check(P.detect(old)[0] == feats and P.detect_retired(old) == {"skill"}, f"nhận diện 0.3s cũ {sorted(feats)}")
-            rec = P.strip_payload(old) if P.has_payload(old) else P.strip_legacy(old)
-            check(sha(rec) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)} + 0.3s cũ")
-            check(not P.detect_stone_xu(out) and P.detect_stone_levels(out) == P.STONE_LEVELS_ALL,
-                  f"mặc định luyện đá trả yên, mọi cấp {sorted(feats)}")
-            if "stone" in feats:
-                xu = P.build(orig, feats, 3, stone_xu=True, stone_levels=(2, 5))
-                check(P.detect(xu)[0] == feats and P.detect_stone_xu(xu) and P.detect_stone_levels(xu) == (2, 5),
-                      f"luyện đá trả xu, cấp 2-5 {sorted(feats)}")
-                check(sha(P.strip_payload(xu)) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)} + xu")
+def test_install(orig):
+    print("[1] Cài mod: nhận diện, mặc định tắt hết, khôi phục bản gốc")
+    out = P.build(orig)
+    kind, on = P.detect(out)
+    check(kind == P.KIND_V3 and not on, f"detect bản cài: {kind} {on}")
+    check(P.payload_version(out) == P.PAYLOAD_VERSION == 3, "cfg_version = 3")
+    cfg = P.cfg_offset(out)
+    check(out[cfg:cfg + 4] == b"HVNJ", "magic HVNJ ở đầu .hvnjd")
+    flags = [k for k in P.PAYLOAD_CFG if k != "cfg_block"]
+    check(all(out[cfg + P.PAYLOAD_CFG[k]] == 0 for k in flags), "mọi cfg phải = 0 (tắt cho tới khi tick)")
+    check(all(P.read_at(out, rva, len(n) // 2) == bytes.fromhex(n) for rva, _o, n in P.PAYLOAD_HOOKS), "đủ hook")
+    check(sha(P.strip_payload(out)) == P.ORIGINAL_SHA256, "khôi phục gốc từ bản cài")
+    check(P.build(P.strip_payload(out)) == out, "cài lại từ bản khôi phục cho cùng kết quả")
+    check(skill_is_original(out), "bản cài không còn patch 0.3s")
+    old = with_retired_skill(out)
+    check(P.detect_retired(old) == {"skill"} and sha(P.strip_payload(old)) == P.ORIGINAL_SHA256,
+          "nhận diện và gỡ được patch 0.3s cũ")
+    check(P.detect(orig) == (P.KIND_ORIGINAL, set()), "nhận diện bản gốc")
+    return out
 
 
 def legacy_build(orig, feats):
@@ -140,16 +143,16 @@ def test_legacy(orig, legacy_path):
     for feats in (["skill"], ["mob"], ["die", "trial"], ["stage"], ["quest"], list(P.LEGACY_PATCHES)):
         lb = legacy_build(orig, feats)
         check(sha(P.strip_legacy(lb)) == P.ORIGINAL_SHA256, f"strip_legacy {feats}")
-        on, _a, kind = P.detect(lb)
+        kind, on = P.detect(lb)
         # skill/die của v1 trùng byte với v2 -> nhận là v2 cũng đúng; skill không còn là tính năng
-        want_kind = "mod v2" if set(feats) <= {"skill", "die"} else "mod cũ v1"
+        want_kind = P.KIND_V2 if set(feats) <= {"skill", "die"} else P.KIND_V1
         check(kind == want_kind and on == set(feats) - {"skill"}, f"detect legacy {feats} -> {kind} {sorted(on)}")
     if legacy_path:
         lb = open(legacy_path, "rb").read()
-        on, _a, kind = P.detect(lb)
+        kind, on = P.detect(lb)
         print(f"    {os.path.basename(legacy_path)}: {kind}, {sorted(on)}")
         rec = P.strip_legacy(lb)
-        check(kind == "mod cũ v1" and rec is not None and sha(rec) == P.ORIGINAL_SHA256,
+        check(kind == P.KIND_V1 and rec is not None and sha(rec) == P.ORIGINAL_SHA256,
               f"--legacy phải là DLL v1 và khôi phục được ({kind})")
 
 
@@ -179,14 +182,51 @@ def test_pe(out):
 
 # ----------------------------------------------------------------------------- 4
 EPILOGUE_START = ("ret", "jmp", "pop")
-# Hàm có prologue riêng (ml64 PROC FRAME): (cấp phát stack, thanh ghi push theo thứ tự địa chỉ tăng dần)
+# Hàm asm có prologue riêng (ml64 PROC FRAME): (cấp phát stack, thanh ghi push theo thứ tự địa chỉ tăng dần)
 FRAME_FUNCS = {
     "quest_tick": (0x40, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbx"]),
     "party_leader": (0x28, ["Rsi", "Rbx"]),
     "party_tick": (0x30, ["Rdi", "Rsi", "Rbx"]),
     "die_tick": (0x38, ["R12", "Rdi", "Rsi", "Rbx"]),
     "stone_tick": (0x68, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbp", "Rbx"]),
+    "action_hook": (0x28, []),
+    "menuchar_hook": (0x28, []),
 }
+# Điểm quay lại / đích nhảy gốc trong hàm game mà cave nhảy tới (phải là đầu lệnh)
+BACK_TARGETS = ["dgj_accept", "dgj_skip", "dgj_epilogue_tail", "clo_store", "dgl_accept", "dgl_skip", "dgj_null",
+                "dgj_core1_back", "dgj_core2_back", "dgj_core2_skip", "ctq_cd1_back", "ctq_cd2_back", "cdy_back",
+                "cdq_back", "dek_keep_auto", "dek_back", "bld_back", "bld_block"]
+# Hook -> (lệnh, khối cave) ở đầu vùng thay
+HOOK_EXPECT = {
+    0x1B9DB1: ("jmp", "dgj_core1"), 0x1B9DFC: ("jge", "dgj_ret"), 0x1B9E4B: ("jmp", "dgj_core2"),
+    0x1B9F11: ("jmp", "dgj_filter"), 0x1BA48E: ("jmp", "dgl_filter"), 0x24B5AC: ("jmp", "clo_stage"),
+    0x19495E: ("call", "quest_tick"), 0x1927E2: ("jmp", "ctq_cd1"), 0x192912: ("jmp", "ctq_cd2"),
+    0x3612E0: ("jmp", "cdy_dlg"), 0x360946: ("jmp", "cdq_dlg"), 0x19C061: ("jmp", "dek_trial"),
+    0x477CBF: ("jmp", "bld_trial"), 0x4E6027: ("call", "action_hook"), 0x1EA0BA: ("call", "menuchar_hook"),
+}
+ASM_FUNCS = set(FRAME_FUNCS)
+
+
+def code_blocks():
+    """(tên, lo, hi, trong frame host?, là asm?) cho mọi entry .pdata của payload và mọi hàm C
+    (kể cả hàm lá không có .pdata)."""
+    S = P.PAYLOAD_SYMBOLS
+    names = {}
+    for k, v in S.items():
+        names.setdefault(v, k)
+    for a, _b, n in P.PAYLOAD_C_FUNCS:
+        names.setdefault(a, n)
+    chained = {S[s]: s for s, _e, _site in B.CHAINED_BLOCKS}
+    out = []
+    for lo, hi, _u in P.PAYLOAD_PDATA:
+        if lo in chained:
+            out.append((chained[lo], lo, hi, True, True))
+        else:
+            n = names.get(lo, f"({lo:#x})")
+            out.append((n, lo, hi, False, n in ASM_FUNCS))
+    with_pdata = {lo for lo, _hi, _u in P.PAYLOAD_PDATA}
+    out += [(n, a, b, False, False) for a, b, n in P.PAYLOAD_C_FUNCS if a not in with_pdata]
+    return out
 
 
 def func_bounds(name):
@@ -195,27 +235,34 @@ def func_bounds(name):
 
 
 def test_disasm(orig, out):
-    print("[4] Disassemble cave và hook")
+    print("[4] Disassemble cave, hàm C và hook")
     S = P.PAYLOAD_SYMBOLS
     code_lo, code_hi = P.PAYLOAD_CODE_RVA, P.PAYLOAD_CODE_RVA + len(P.PAYLOAD_CODE)
     data_lo, data_hi = P.PAYLOAD_DATA_RVA, P.PAYLOAD_DATA_RVA + len(P.PAYLOAD_DATA)
-    # hàm game đã biết + điểm vào các hàm có prologue riêng của mod (có unwind info riêng)
-    allowed_targets = set(B.GAME_SYMBOLS.values()) | {S[n] for n in FRAME_FUNCS}
-    allowed_mem = {v for k, v in B.GAME_SYMBOLS.items() if k.endswith("_TypeInfo")} | \
+    blocks = code_blocks()
+    func_starts = {lo for _n, lo, _hi, in_host, _a in blocks if not in_host} | {a for a, _b, _n in P.PAYLOAD_C_FUNCS}
+    allowed_targets = set(B.GAME_SYMBOLS.values()) | func_starts
+    allowed_mem = {v for k, v in B.GAME_SYMBOLS.items() if k.endswith(("_TypeInfo", "_mi"))} | \
         {B.GAME_SYMBOLS["imp_GetSystemTimeAsFileTime"]}
+    game_pdata = B.PE(orig).pdata()
 
-    # đích nhảy về hàm game phải là đầu lệnh
-    hosts = {"dgj_accept": (0x1B9C90, 0x1BA0D0), "dgj_skip": (0x1B9C90, 0x1BA0D0),
-             "dgj_epilogue_tail": (0x1B9C90, 0x1BA0D0), "clo_store": (0x24AC30, 0x24B5D0),
-             "dgl_accept": (0x1BA2D0, 0x1BADE0), "dgl_skip": (0x1BA2D0, 0x1BADE0)}
-    for name, (a, b) in hosts.items():
+    def host_of(rva):
+        return next((a, b) for a, b, _u in game_pdata if a <= rva < b)
+
+    for name in BACK_TARGETS:
+        a, b = host_of(B.GAME_SYMBOLS[name])
         check(B.GAME_SYMBOLS[name] in insn_starts(orig, a, b), f"{name} không phải đầu lệnh")
     check(disasm(orig, 0x1BA085, 0x10)[1].mnemonic == "xor", "1BA08A phải là xor eax,eax")
 
-    blocks = [(n, S[n], S[n + "_end"], True) for n in ("dgj_ret", "dgj_filter", "clo_stage", "dgl_filter")]
-    blocks += [(n, *func_bounds(n), False) for n in FRAME_FUNCS]
-    check(len(blocks) == len(P.PAYLOAD_PDATA), "mỗi khối code phải có đúng một entry .pdata")
-    for start, lo, hi, in_host in blocks:
+    with_pdata = {lo for lo, _hi, _u in P.PAYLOAD_PDATA}
+    check(len(with_pdata) == len(P.PAYLOAD_PDATA) and len([b for b in blocks if b[3]]) == len(B.CHAINED_BLOCKS)
+          and all(lo in with_pdata for _n, lo, _hi, _h, is_asm in blocks if is_asm),
+          "mỗi khối asm phải có đúng một entry .pdata")
+    check({n for _a, _b, n in P.PAYLOAD_C_FUNCS} >= {"mod_action", "mod_cfg_load", "mod_menu_add_entry", "show_menu"},
+          "thiếu hàm C")
+    check(all(S[n] in func_starts for n in ("mod_action", "mod_cfg_load", "mod_menu_add_entry")),
+          "hàm C phải có unwind info")
+    for start, lo, hi, in_host, is_asm in blocks:
         insns = disasm(out, lo, hi - lo)
         check(insns and insns[-1].address + insns[-1].size == hi, f"{start}: disassemble không trọn khối")
         for i, ins in enumerate(insns):
@@ -224,7 +271,14 @@ def test_disasm(orig, out):
                 if op.type == capstone.x86.X86_OP_IMM:
                     t = op.imm
                     check(lo <= t < hi or t in allowed_targets, f"{start}: {ins.mnemonic} tới {t:#x} lạ")
-            if ins.mnemonic == "call" and i + 1 < len(insns):
+                elif ins.mnemonic == "call" and op.type == capstone.x86.X86_OP_MEM:
+                    # qua IAT (GetSystemTimeAsFileTime) hoặc hàm ảo của đối tượng game (vtable)
+                    t = ins.address + ins.size + op.mem.disp
+                    check(op.mem.base != capstone.x86.X86_REG_RIP or t == B.GAME_SYMBOLS["imp_GetSystemTimeAsFileTime"],
+                          f"{start}: call gián tiếp lạ tại {ins.address:#x}")
+                elif not (ins.mnemonic == "jmp" and op.type == capstone.x86.X86_OP_REG):
+                    check(False, f"{start}: {ins.mnemonic} {ins.op_str} không xác định được đích")
+            if is_asm and ins.mnemonic == "call" and i + 1 < len(insns):
                 nxt = insns[i + 1]
                 bad = nxt.mnemonic in EPILOGUE_START or (nxt.mnemonic in ("add", "lea") and "rsp" in nxt.op_str.split(",")[0])
                 check(not bad, f"{start}: sau call tại {ins.address:#x} là '{nxt.mnemonic}' (giống epilogue)")
@@ -239,31 +293,20 @@ def test_disasm(orig, out):
                 check(not writes_rsp and ins.mnemonic not in ("push", "pop", "ret"),
                       f"{start}: '{ins.mnemonic} {ins.op_str}' đổi rsp trong frame host")
 
-    expect = {
-        0x1B9DFC: ("jge", S["dgj_ret"]), 0x1B9E4B: ("jmp", 0x1B9EB4), 0x1B9F11: ("jmp", S["dgj_filter"]),
-        0x24B5AC: ("jmp", S["clo_stage"]), 0x19495E: ("call", S["quest_tick"]),
-        0x1BA48E: ("jmp", S["dgl_filter"]),
-    }
-    for rva, (mn, tgt) in expect.items():
+    check({rva for rva, _o, _n in P.PAYLOAD_HOOKS} >= set(HOOK_EXPECT) - {0x1BA48E} | {0x1BA485},
+          "danh sách hook thiếu")
+    for rva, (mn, tgt) in HOOK_EXPECT.items():
         ins = disasm(out, rva, 8)[0]
-        check(ins.mnemonic == mn and ins.operands[0].imm == tgt, f"hook {rva:#x}: {ins.mnemonic} {ins.op_str}")
-    ins = disasm(out, 0x1B9DB1, 6)[0]
-    check(ins.mnemonic == "nop" and ins.size == 6, "0x1B9DB1 phải là nop 6 byte")
-    # đoạn bị bỏ qua ở 1B9F16..1B9F2F không còn ai nhảy vào
-    for ins in disasm(orig, 0x1B9C90, 0x1BA0D0 - 0x1B9C90):
-        if ins.mnemonic.startswith("j") and ins.operands[0].type == capstone.x86.X86_OP_IMM:
-            t = ins.operands[0].imm
-            check(not (0x1B9F16 <= t < 0x1B9F2F) or 0x1B9F11 <= ins.address < 0x1B9F2F,
-                  f"lệnh {ins.address:#x} nhảy vào vùng đã thay {t:#x}")
-    for ins in disasm(orig, 0x1BA2D0, 0x1BADE0 - 0x1BA2D0):
-        if ins.mnemonic.startswith("j") and ins.operands[0].type == capstone.x86.X86_OP_IMM:
-            t = ins.operands[0].imm
-            check(not (0x1BA48E <= t < 0x1BA4AB) or 0x1BA48E <= ins.address < 0x1BA4AB,
-                  f"lệnh {ins.address:#x} nhảy vào vùng đã thay của mo.dgl {t:#x}")
-    for ins in disasm(orig, 0x24AC30, 0x24B5D0 - 0x24AC30):
-        if ins.mnemonic.startswith("j") and ins.operands[0].type == capstone.x86.X86_OP_IMM:
-            t = ins.operands[0].imm
-            check(not (0x24B5B1 <= t < 0x24B5B6), f"lệnh {ins.address:#x} nhảy vào giữa hook clo")
+        check(ins.mnemonic == mn and ins.operands[0].imm == S[tgt], f"hook {rva:#x}: {ins.mnemonic} {ins.op_str}")
+    # không lệnh nào của hàm game nhảy vào giữa vùng đã thay
+    for rva, o, _n in P.PAYLOAD_HOOKS:
+        end = rva + len(o) // 2
+        a, b = host_of(rva)
+        for ins in disasm(orig, a, b - a):
+            if ins.mnemonic.startswith("j") and ins.operands and ins.operands[0].type == capstone.x86.X86_OP_IMM:
+                t = ins.operands[0].imm
+                check(not (rva < t < end) or rva <= ins.address < end,
+                      f"lệnh {ins.address:#x} nhảy vào giữa vùng hook {rva:#x}")
 
 
 # ----------------------------------------------------------------------------- 5
@@ -282,10 +325,7 @@ def test_runtime(out):
     if os.name != "nt":
         print("    bỏ qua (không phải Windows)")
         return
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.LoadLibraryExW.restype = ctypes.c_void_p
-    k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
-    k32.FreeLibrary.argtypes = [ctypes.c_void_p]
+    k32 = kernel32()
     k32.RtlLookupFunctionEntry.restype = ctypes.c_void_p
     k32.RtlLookupFunctionEntry.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64), ctypes.c_void_p]
     k32.RtlVirtualUnwind.restype = ctypes.c_void_p
@@ -315,9 +355,9 @@ def test_runtime(out):
         # trang ghi được của image nạp ở dạng copy-on-write (PAGE_WRITECOPY) cho tới lần ghi đầu
         check(prot(P.PAYLOAD_DATA_RVA) in (0x04, 0x08), f".hvnjd protect {prot(P.PAYLOAD_DATA_RVA):#x} không ghi được")
         check(prot(0x18F000) == 0x20, "section il2cpp vẫn phải là RX (cave cũ ghi vào đây -> crash)")
-        cfg = ctypes.string_at(base + P.PAYLOAD_DATA_RVA, 16)
-        want = {P.PAYLOAD_CFG["cfg_" + f]: 1 for f in P.PAYLOAD_FEATURES}
-        check(cfg[:4] == b"HVNJ" and all(cfg[o] == v for o, v in want.items()), f"cfg trong bộ nhớ {cfg.hex()}")
+        cfg = ctypes.string_at(base + P.PAYLOAD_DATA_RVA, 0x18)
+        check(cfg[:5] == b"HVNJ\x03" and not any(cfg[o] for k, o in P.PAYLOAD_CFG.items() if k != "cfg_block"),
+              f"cfg trong bộ nhớ {cfg.hex()}")
 
         def lookup(rva):
             ib = ctypes.c_uint64()
@@ -354,19 +394,20 @@ def test_runtime(out):
 
         regs = {k: 0x1111111100000000 + i for i, k in enumerate(NONVOL)}
         S = P.PAYLOAD_SYMBOLS
-        # cave chạy trong frame host: unwind phải giống hệt unwind tại chỗ hook gốc
-        pairs = [("dgj_ret", S["dgj_ret"], 0x1B9DFC), ("dgj_filter", S["dgj_filter"], 0x1B9F11),
-                 ("dgl_filter", S["dgl_filter"], 0x1BA48E)]
-        insns = disasm(out, S["clo_stage"], S["clo_stage_end"] - S["clo_stage"])
-        pairs += [(f"clo_stage sau call @{i.address:#x}", insns[k + 1].address, 0x24B5B1)
-                  for k, i in enumerate(insns) if i.mnemonic == "call"]
+        # cave chạy trong frame host: unwind ở đầu cave và sau mỗi call phải giống unwind tại chỗ hook
+        pairs = []
+        for start, end, site in B.CHAINED_BLOCKS:
+            pairs.append((start, S[start], site))
+            insns = disasm(out, S[start], S[end] - S[start])
+            pairs += [(f"{start} sau call @{i.address:#x}", insns[k + 1].address, site)
+                      for k, i in enumerate(insns) if i.mnemonic == "call"]
         for name, cave_rva, host_rva in pairs:
             fill_stack()
             a = unwind(cave_rva, sbase, regs)
             fill_stack()
             b = unwind(host_rva, sbase, regs)
             check(a is not None and a == b, f"unwind {name}: {a} != {b}")
-        # hàm có prologue riêng: unwind sau mỗi call phải trả đúng thanh ghi đã lưu và địa chỉ về
+        # hàm asm có prologue riêng: unwind sau mỗi call phải trả đúng thanh ghi đã lưu và địa chỉ về
         n_func = 0
         ret = 0x7FF612345678
         for name, (alloc, pushed) in FRAME_FUNCS.items():
@@ -386,120 +427,55 @@ def test_runtime(out):
                     and all(r[kk] == 0xAB00 + o for kk, o in saved.items())
                 check(ok, f"unwind {name} @{pc:#x}: {r}")
                 n_func += 1
-        print(f"    {len(pairs)} vị trí trong frame host + {n_func} vị trí trong {len(FRAME_FUNCS)} hàm riêng")
+        print(f"    {len(pairs)} vị trí trong frame host + {n_func} vị trí trong {len(FRAME_FUNCS)} hàm asm, "
+              f"{len(P.PAYLOAD_PDATA)} entry .pdata")
     finally:
         k32.FreeLibrary(ctypes.c_void_p(base))
         shutil.rmtree(td, ignore_errors=True)
 
 
-# ----------------------------------------------------------------------------- 8
-def test_cli(orig, legacy_path):
-    print("[8] CLI trên bản sao")
-    td = tempfile.mkdtemp()
-    dll = os.path.join(td, "GameAssembly.dll")
-    script = os.path.join(ROOT, "patch_skill_delay.py")
-
-    def run(*a):
-        r = subprocess.run([sys.executable, script, "--dll", dll, *a], capture_output=True, text=True, encoding="utf-8")
-        return r.returncode, r.stdout + r.stderr
-
-    try:
-        src = open(legacy_path, "rb").read() if legacy_path else legacy_build(orig, list(P.LEGACY_PATCHES))
-        open(dll, "wb").write(src)
-        rc, txt = run("--mob")
-        check(rc == 0, f"--mob trên v1: {txt}")
-        cur = open(dll, "rb").read()
-        on, _a, kind = P.detect(cur)
-        check(kind == "mod v2" and on == set(P.LEGACY_PATCHES) - {"skill"}, f"nâng cấp v1 -> {kind} {sorted(on)}")
-        check(skill_is_original(cur), "nâng cấp v1 phải gỡ patch 0.3s")
-        check(sha(open(dll + ".bak", "rb").read()) == P.ORIGINAL_SHA256, ".bak là bản gốc")
-        # DLL v2 cũ (còn 0.3s, không có .bak) -> --status cảnh báo, chạy lại thì gỡ
-        os.remove(dll + ".bak")
-        open(dll, "wb").write(with_retired_skill(P.build(orig, set(P.FEATURES), 2)))
-        rc, txt = run("--status")
-        check(rc == 0 and "0.3s" in txt, f"--status cảnh báo 0.3s cũ: {txt}")
-        rc, txt = run("--skill")
-        check(rc == 0 and "đã bị gỡ" in txt and P.detect_retired(open(dll, "rb").read()) == {"skill"},
-              f"--skill chỉ báo đã gỡ, không ghi file: {txt}")
-        rc, txt = run("--die")
-        cur = open(dll, "rb").read()
-        on, acc, _k = P.detect(cur)
-        check(rc == 0 and on == set(P.FEATURES) and acc == 2 and skill_is_original(cur), f"gỡ 0.3s khi chạy lại: {txt}")
-        rc, txt = run("--remove", "quest", "stage", "--accept-option", "1")
-        on, acc, _k = P.detect(open(dll, "rb").read())
-        check(rc == 0 and on == set(P.FEATURES) - {"quest", "stage"} and acc == 1, f"--remove: {sorted(on)} {acc}")
-        rc, txt = run("--quest")
-        on, acc, _k = P.detect(open(dll, "rb").read())
-        check(rc == 0 and "quest" in on and acc == 1, f"--quest giữ accept-option: {sorted(on)} {acc}")
-        rc, txt = run("--remove", "stone")
-        rc, txt = run("--stone-pay", "xu")
-        cur = open(dll, "rb").read()
-        check(rc == 0 and "stone" in P.detect(cur)[0] and P.detect_stone_xu(cur) and "xu" in txt,
-              f"--stone-pay xu bật luyện đá trả xu: {txt}")
-        rc, txt = run("--mob")
-        check(rc == 0 and P.detect_stone_xu(open(dll, "rb").read()), "chạy lại giữ chế độ trả xu")
-        rc, txt = run("--stone-pay", "yen")
-        check(rc == 0 and not P.detect_stone_xu(open(dll, "rb").read()), "--stone-pay yen")
-        rc, txt = run("--remove", "stone")
-        rc, txt = run("--stone-levels", "1-3")
-        cur = open(dll, "rb").read()
-        check(rc == 0 and "stone" in P.detect(cur)[0] and P.detect_stone_levels(cur) == (1, 3)
-              and "lên đá cấp 3" in txt, f"--stone-levels 1-3 bật luyện đá: {txt}")
-        rc, txt = run("--die")
-        check(rc == 0 and P.detect_stone_levels(open(dll, "rb").read()) == (1, 3), "chạy lại giữ cấp đá")
-        for bad in ("3-1", "3-3", "0-2", "1-13", "1", "abc"):
-            before = open(dll, "rb").read()
-            rc, txt = run("--stone-levels", bad)
-            check(rc != 0 and open(dll, "rb").read() == before, f"--stone-levels {bad} phải bị từ chối: {txt}")
-        rc, txt = run("--stone-levels", "6")
-        check(rc == 0 and P.detect_stone_levels(open(dll, "rb").read()) == (1, 6), f"--stone-levels 6 = 1-6: {txt}")
-        rc, txt = run("--stone-levels", "all")
-        check(rc == 0 and P.detect_stone_levels(open(dll, "rb").read()) == P.STONE_LEVELS_ALL, "--stone-levels all")
-        rc, txt = run("--status")
-        check(rc == 0 and "BẬT" in txt, "--status")
-        rc, txt = run("--restore")
-        check(rc == 0 and sha(open(dll, "rb").read()) == P.ORIGINAL_SHA256, f"--restore: {txt}")
-        open(dll + ".bak", "wb").write(b"rac")
-        rc, txt = run("--all")
-        check(rc == 0 and os.path.exists(dll + ".bak.khong-phai-ban-goc"), f".bak hỏng được giữ lại: {txt}")
-        check(sha(open(dll + ".bak", "rb").read()) == P.ORIGINAL_SHA256, ".bak mới là bản gốc")
-    finally:
-        shutil.rmtree(td, ignore_errors=True)
+# ----------------------------------------------------------------------------- 6-9
+U64 = ctypes.c_uint64
+F = ctypes.CFUNCTYPE
 
 
-def test_old_payload(old_path):
-    """DLL v2 dựng bằng payload cũ hơn (code cave khác) -> nhận diện, khôi phục, nâng cấp giữ tính năng."""
-    print("[9] Nâng cấp từ DLL v2 dựng bằng payload cũ")
-    old = open(old_path, "rb").read()
-    on, acc, kind = P.detect(old)
-    print(f"    {os.path.basename(old_path)}: {kind}, {sorted(on)}, accept={acc}")
-    check(kind == "mod v2" and on, "phải nhận ra tính năng của payload cũ")
-    check(sha(P.strip_payload(old)) == P.ORIGINAL_SHA256, "strip_payload trên payload cũ")
-    td = tempfile.mkdtemp()
-    try:
-        dll = os.path.join(td, "GameAssembly.dll")
-        open(dll, "wb").write(old)
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "patch_skill_delay.py"), "--dll", dll, "--party"],
-                           capture_output=True, text=True, encoding="utf-8")
-        new_on, new_acc, _k = P.detect(open(dll, "rb").read())
-        check(r.returncode == 0 and new_on == on | {"party"} and new_acc == acc,
-              f"--party trên payload cũ: {sorted(new_on)} {r.stdout}")
-        check(open(dll, "rb").read() == P.build(P.strip_payload(old), on | {"party"}, acc), "kết quả = dựng mới từ gốc")
-    finally:
-        shutil.rmtree(td, ignore_errors=True)
+def asm_bytes(parts):
+    """Ghép mã máy: parts là list bytes, ('call', nhãn) hoặc ('label', nhãn)."""
+    out, fix, labels = bytearray(), [], {}
+    for p in parts:
+        if isinstance(p, tuple) and p[0] == "label":
+            labels[p[1]] = len(out)
+        elif isinstance(p, tuple) and p[0] == "call":
+            out += b"\xe8\0\0\0\0"
+            fix.append((len(out), p[1]))
+        else:
+            out += p
+    for end, lab in fix:
+        struct.pack_into("<i", out, end - 4, labels[lab] - end)
+    return bytes(out)
 
 
-# ----------------------------------------------------------------------------- 6
+# T(rcx = rax vào cave, edx = 0 -> ZF = 1, r8 = cave, r9 = kết quả [rax ra, rsi ra, rsi vào]).
+# Gọi một nhãn chỉ chứa "jmp r10" để cave chạy với rsp thẳng hàng 16 như trong hàm game; stub ở đích
+# nhảy ghi mã đích rồi "ret" về đây.
+GATE_TRAMPOLINE = asm_bytes([
+    b"\x56", b"\x57", b"\x48\x83\xec\x30", b"\x48\x89\xc8", b"\x4c\x89\xcf", b"\x48\x8b\x77\x10",
+    b"\x4d\x89\xc2", b"\x85\xd2", ("call", "L1"), b"\x48\x89\x07", b"\x48\x89\x77\x08",
+    b"\x48\x83\xc4\x30", b"\x5f", b"\x5e", b"\xc3", ("label", "L1"), b"\x41\xff\xe2"])
+# T2(rcx = List<iw>, rdx = menuchar_hook): đặt rsi = list như mo.doMenuChar rồi gọi hook.
+RSI_TRAMPOLINE = asm_bytes([b"\x56", b"\x48\x83\xec\x20", b"\x48\x89\xce", b"\xff\xd2",
+                            b"\x48\x83\xc4\x20", b"\x5e", b"\xc3"])
+
+
 class CaveSim:
-    """Chạy THẬT mã máy của cave (stone_tick, quest_tick) trong DLL đã dựng (nạp bằng
-    LoadLibraryEx). Mọi hàm game / runtime IL2CPP mà cave gọi được thay bằng callback Python,
-    các con trỏ TypeInfo trỏ tới class giả; nhân vật, hành trang, đá, nhiệm vụ, NPC là vùng
-    nhớ giả có đúng offset."""
+    """Chạy THẬT mã máy của mod trong DLL đã dựng (nạp bằng LoadLibraryEx). Mọi hàm game /
+    runtime IL2CPP mà mod gọi được thay bằng callback Python, các con trỏ TypeInfo trỏ tới class
+    giả; nhân vật, hành trang, đá, nhiệm vụ, NPC, chuỗi, List<iw>, PlayerPrefs là dữ liệu giả."""
     CRYSTALS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304]
     FEES = [0, 10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240]
     T0 = 13_400_000_000_000          # ms tính từ 1601, cỡ năm 2026
 
-    def __init__(self, k32, dll_bytes, name, crystals=None, fees=None):
+    def __init__(self, k32, dll_bytes, name, crystals=None, fees=None, cfg=None):
         self.k32 = k32
         self.heap = ctypes.create_string_buffer(0x80000)
         self.top = ctypes.addressof(self.heap)
@@ -507,18 +483,19 @@ class CaveSim:
         open(self.path, "wb").write(dll_bytes)
         self.base = k32.LoadLibraryExW(self.path, None, 0x1)
         assert self.base, f"LoadLibraryEx lỗi {ctypes.get_last_error()}"
+        self.exec_mem = None
         self.now = self.T0
         self.sends, self.msgs, self.writers = [], {}, {}
         self.array_news, self.class_inits, self.init_md = [], [], []
+        self.dga, self.dgf, self.walks, self.menus = [], [], [], []
+        self.lists, self.iws, self.shown, self.prefs, self.djh = {}, {}, [], {}, []
         G = B.GAME_SYMBOLS
-        U64 = ctypes.c_uint64
-        F = ctypes.CFUNCTYPE
         self.cbs = {
             "lm_cua": F(U64, U64)(lambda _mi: self.char),
             "lj_cmy": F(U64, U64)(lambda _mi: self.service),
             "il2cpp_init_md": F(U64, U64)(lambda slot: self.init_md.append(slot - self.base) or 0),
             "il2cpp_class_init": F(U64, U64)(lambda k: self.class_inits.append(k) or 0),
-            "il2cpp_object_new": F(U64, U64)(self._object_new),
+            "il2cpp_object_new": F(U64, U64)(lambda _k: self.alloc(0x60)),
             "il2cpp_array_new": F(U64, U64, U64)(self._array_new),
             "bc_ctor": F(U64, U64, U64, U64)(self._bc_ctor),
             "bl_bat": F(U64, U64, U64, U64)(self._bl_bat),
@@ -534,8 +511,22 @@ class CaveSim:
                 lambda _c, x, y, _mi: self.walks.append((x, y)) or 0),
             "lj_menu": F(U64, U64, U64, U64, U64)(
                 lambda _s, npc, menu, opt: self.menus.append((npc & 0xFFFFFFFF, menu & 0xFFFFFFFF, opt & 0xFFFFFFFF)) or 0),
+            # menu Mod (hvnj_menu.c)
+            "il2cpp_string_new_utf16": F(U64, U64, U64)(
+                lambda p, n: self.make_str(ctypes.wstring_at(p, n & 0xFFFFFFFF))),
+            "prefs_get_string": F(U64, U64, U64)(lambda key, _mi: self.make_str(self.prefs.get(self.read_str(key), ""))),
+            "prefs_set_string": F(U64, U64, U64, U64)(
+                lambda key, val, _mi: self.prefs.__setitem__(self.read_str(key), self.read_str(val)) or 0),
+            "list_iw_ctor": F(U64, U64, U64)(lambda lst, _mi: self.lists.__setitem__(lst, []) or 0),
+            "list_iw_add": F(U64, U64, U64, U64)(lambda lst, it, _mi: self.lists[lst].append(it) or 0),
+            "iw_ctor_caption": F(U64, U64, U64, U64, U64)(
+                lambda it, cap, act, _mi: self.iws.__setitem__(it, (self.read_str(cap), act & 0xFFFFFFFF)) or 0),
+            "ms_dkz": F(U64, U64)(lambda _mi: self.ms),
+            "ms_dla": F(U64, U64, U64, U64, U64, U64, U64, U64)(
+                lambda _ms, lst, *_a: self.shown.append([self.iws[i] for i in self.lists[lst]]) or 0),
+            "mo_djh": F(U64, U64, U64, U64, U64)(
+                lambda mo, act, p, _mi: self.djh.append((mo, act & 0xFFFFFFFF, p)) or 0),
         }
-        self.dga, self.dgf, self.walks, self.menus = [], [], [], []
         self.cb_time = F(None, U64)(lambda p: setattr(U64.from_address(p), "value", self.now * 10000))
         for name_, cb in self.cbs.items():
             stub = b"\x48\xb8" + struct.pack("<Q", ctypes.cast(cb, ctypes.c_void_p).value) + b"\xff\xe0"
@@ -544,13 +535,16 @@ class CaveSim:
                   struct.pack("<Q", ctypes.cast(self.cb_time, ctypes.c_void_p).value))
         # class giả: +133h cờ cctor, +0B8h static fields
         self.statics = {}
-        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo"):
+        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo", "lm", "list_iw", "iw"):
             klass = self.alloc(0x140)
             st = self.alloc(0x200)
             self.w64(klass + 0xB8, st)
             self.statics[k] = st
             self.poke(self.base + G[k + "_TypeInfo"], struct.pack("<Q", klass))
             setattr(self, k + "_klass", klass)
+        for k in ("list_iw_ctor_mi", "list_iw_add_mi"):
+            self.poke(self.base + G[k], struct.pack("<Q", self.alloc(0x20)))
+        self.ms = self.alloc(0x40)
         self.ek_instance = self.alloc(0x80)
         self.w64(self.statics["ek"], self.ek_instance)
         self.w8(self.statics["ca"] + 0x16, 1)                      # Auto bật
@@ -562,10 +556,10 @@ class CaveSim:
         self.service = self.alloc(0x40)
         self.session = self.alloc(0x40)
         self.w64(self.service + 0x10, self.session)
-        self.fn = ctypes.CFUNCTYPE(None)(self.base + P.PAYLOAD_SYMBOLS["stone_tick"])
+        self.fn = F(None)(self.base + P.PAYLOAD_SYMBOLS["stone_tick"])
         # quest_tick: mo (GameScr), NPC 25 có vtable kk.cit()/ciu() trả toạ độ
         self.mo = self.alloc(0x400)
-        self.qfn = ctypes.CFUNCTYPE(None, U64)(self.base + P.PAYLOAD_SYMBOLS["quest_tick"])
+        self.qfn = F(None, U64)(self.base + P.PAYLOAD_SYMBOLS["quest_tick"])
         self.w8(self.char + 0x170, 1)                               # hệ phái 1 -> trường map 1
         ctypes.c_float.from_address(self.char + 0xB8).value = 100.0
         ctypes.c_float.from_address(self.char + 0xBC).value = 100.0
@@ -579,6 +573,8 @@ class CaveSim:
         self.w64(vt + 0x188, ctypes.cast(self.cb_npc_y, ctypes.c_void_p).value)
         self.set_map(1)
         self.set_tasks([])
+        # cấu hình như khi đã tick trong menu; m_loaded = 1: không đọc PlayerPrefs
+        self.set_cfg(m_loaded=1, **(cfg or {}))
 
     # --- bộ nhớ giả
     def alloc(self, n):
@@ -599,10 +595,52 @@ class CaveSim:
     def w8(self, a, v):
         ctypes.c_uint8.from_address(a).value = v
 
+    def r8(self, a):
+        return ctypes.c_uint8.from_address(a).value
+
     def poke(self, addr, data):
         old = ctypes.c_uint32()
         assert self.k32.VirtualProtect(ctypes.c_void_p(addr), len(data), 0x40, ctypes.byref(old))
         ctypes.memmove(addr, data, len(data))
+
+    def sym(self, name):
+        return self.base + P.PAYLOAD_SYMBOLS[name]
+
+    def set_cfg(self, **kv):
+        for k, v in kv.items():
+            self.poke(self.sym(k), bytes([v & 0xFF]))
+
+    def get_cfg(self, k):
+        return self.r8(self.sym(k))
+
+    def make_str(self, s):
+        """System.String giả: length ở +10h, ký tự UTF-16 ở +14h."""
+        raw = s.encode("utf-16-le")
+        a = self.alloc(0x18 + len(raw))
+        self.w32(a + 0x10, len(raw) // 2)
+        ctypes.memmove(a + 0x14, raw, len(raw))
+        return a
+
+    def read_str(self, a):
+        if not a:
+            return None
+        n = ctypes.c_int32.from_address(a + 0x10).value
+        return ctypes.wstring_at(a + 0x14, n)
+
+    def code(self, blob):
+        """Ghi mã máy vào vùng nhớ RWX riêng (gần DLL để nhảy rel32 tới được), trả về địa chỉ."""
+        if not self.exec_mem:
+            for k in range(1, 64):
+                hint = (self.base + 0x1300000 + k * 0x100000) & ~0xFFFF
+                self.exec_mem = self.k32.VirtualAlloc(ctypes.c_void_p(hint), 0x10000, 0x3000, 0x40)
+                if self.exec_mem:
+                    break
+            assert self.exec_mem and abs(self.exec_mem - self.base) < 0x7FF00000
+            self.exec_top = self.exec_mem
+        a = self.exec_top
+        ctypes.memmove(a, blob, len(blob))
+        self.exec_top += (len(blob) + 15) & ~15
+        return a
 
     def set_table(self, off, values):
         arr = self.alloc(0x20 + 4 * len(values))
@@ -669,10 +707,6 @@ class CaveSim:
             self.set_slot(i, None)
 
     # --- callback thay hàm game
-    def _object_new(self, klass):
-        assert klass == self.bc_klass
-        return self.alloc(0x40)
-
     def _array_new(self, klass, n):
         self.array_news.append((klass, n))
         return self.alloc(0x20 + 8 * n)
@@ -738,35 +772,249 @@ class CaveSim:
         self.fn()
         return self.sends[n:]
 
+    # --- cave chặn theo cờ
+    def install_gate_stubs(self):
+        """Đặt stub "ghi mã đích; ret" tại các điểm quay lại trong hàm game."""
+        self.marker = self.alloc(0x10)
+        self.gate_fn = F(None, U64, U64, U64, U64)(self.code(GATE_TRAMPOLINE))
+        for i, name in enumerate(BACK_TARGETS):
+            # thunk "mov r11, marker; mov dword [r11], i; ret" + stub 5 byte "jmp thunk" ở điểm quay lại
+            # (dgj_skip / dgj_null / dgj_epilogue_tail chỉ cách nhau 7 byte)
+            thunk = self.code(b"\x49\xbb" + struct.pack("<Q", self.marker) + b"\x41\xc7\x03" + struct.pack("<I", i)
+                              + b"\xc3")
+            at = self.base + B.GAME_SYMBOLS[name]
+            self.poke(at, b"\xe9" + struct.pack("<i", thunk - (at + 5)))
+
+    def gate(self, cave, rax, zf, rsi=0):
+        """Chạy cave với rax, cờ ZF; trả về (tên đích nhảy tới, rax ra, rsi ra)."""
+        res = self.alloc(0x20)
+        self.w64(res + 0x10, rsi)
+        self.w32(self.marker, 0xFFFFFFFF)
+        self.gate_fn(rax, 0 if zf else 1, self.sym(cave), res)
+        i = ctypes.c_uint32.from_address(self.marker).value
+        return (BACK_TARGETS[i] if i < len(BACK_TARGETS) else None,
+                ctypes.c_uint64.from_address(res).value, ctypes.c_uint64.from_address(res + 8).value)
+
+    # --- menu Mod
+    def action(self, act, p=0):
+        F(None, U64, U64, U64, U64)(self.sym("action_hook"))(self.mo, act, p, 0)
+
+    def menuchar(self, lst):
+        fn = F(U64, U64, U64)(self.code(RSI_TRAMPOLINE))
+        return fn(lst, self.sym("menuchar_hook"))
+
     def close(self):
         self.k32.FreeLibrary(ctypes.c_void_p(self.base))
+        if self.exec_mem:
+            self.k32.VirtualFree(ctypes.c_void_p(self.exec_mem), 0, 0x8000)
         try:
             os.remove(self.path)
         except OSError:
             pass
 
 
-def test_stone_logic(orig):
-    print("[6] Chạy thật stone_tick với nhân vật / hành trang giả")
+def test_gates(orig, out):
+    print("[6] Chạy thật các cave chặn theo cờ: tắt = lệnh gốc, bật = hành vi mod")
     if os.name != "nt":
         print("    bỏ qua (không phải Windows)")
         return
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.LoadLibraryExW.restype = ctypes.c_void_p
-    k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
-    k32.FreeLibrary.argtypes = [ctypes.c_void_p]
-    k32.VirtualProtect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
-    TOO_MUCH = 2**31 - 1        # bảng phí là int32; nhân vật giả có 10^9 xu + 10^9 yên
+    s = CaveSim(kernel32(), out, "gates")
+    n = 0
+    try:
+        s.install_gate_stubs()
+        lm_klass = s.lm_klass
+        mo_klass = s.mo_klass
+
+        def expect(cave, rax, zf, cfg, want, extra=None, msg=""):
+            nonlocal n
+            n += 1
+            s.set_cfg(cfg_mob=0, cfg_stage=0, cfg_die=0, cfg_trial=0)
+            s.set_cfg(**cfg)
+            got = s.gate(cave, rax, zf, rsi=0x5151)
+            ok = got[0] == want and (extra is None or extra(got))
+            check(ok, f"{cave} {msg} cfg={cfg} ZF={int(zf)}: -> {got[0]} (mong đợi {want})")
+
+        obj = s.alloc(0x200)
+        for cave, back, off, size, normal, fast in (
+                ("ctq_cd1", "ctq_cd1_back", 0x152, 1, 15, 1), ("ctq_cd2", "ctq_cd2_back", 0x152, 1, 15, 1),
+                ("cdy_dlg", "cdy_back", 0x3C, 4, 500, 2), ("cdq_dlg", "cdq_back", 0x40, 4, 500, 2)):
+            def val(o=off, sz=size):
+                return ctypes.c_uint8.from_address(obj + o).value if sz == 1 else ctypes.c_uint32.from_address(obj + o).value
+            expect(cave, obj, False, {}, back, lambda _g, v=val, w=normal: v() == w, "chết tắt: giữ giá trị gốc")
+            expect(cave, obj, False, {"cfg_die": 1}, back, lambda _g, v=val, w=fast: v() == w, "chết bật: rút ngắn")
+        for zf, cfg, want in ((False, {}, "dek_keep_auto"), (True, {}, "dek_back"),
+                              (True, {"cfg_trial": 1}, "dek_keep_auto"), (False, {"cfg_trial": 1}, "dek_keep_auto")):
+            expect("dek_trial", obj, zf, cfg, want,
+                   (lambda g: g[1] == mo_klass) if want == "dek_back" else None, "mo.dek map 161")
+        for zf, cfg, want in ((False, {}, "bld_back"), (True, {}, "bld_block"),
+                              (True, {"cfg_trial": 1}, "bld_back")):
+            expect("bld_trial", obj, zf, cfg, want, None, "eq.bld map 161")
+        for zf, cfg, want in ((False, {}, "dgj_core1_back"), (True, {}, "dgj_null"),
+                              (True, {"cfg_mob": 1}, "dgj_core1_back"), (True, {"cfg_stage": 1}, "dgj_core1_back")):
+            expect("dgj_core1", obj, zf, cfg, want, None, "mo.dgj không có nhiệm vụ chính")
+        s.w32(obj + 0x78, 0x1234)
+        expect("dgj_core2", obj, False, {}, "dgj_core2_back", lambda g: g[1] == lm_klass and g[2] == 0x1234,
+               "tắt: chạy lại 2 lệnh gốc")
+        expect("dgj_core2", obj, False, {"cfg_stage": 1}, "dgj_core2_skip", lambda g: g[2] == 0x5151,
+               "bật: bỏ kiểm tra quái nhiệm vụ chính")
+        # bộ lọc quái
+        mob, boss, tathu = s.alloc(0x100), s.alloc(0x100), s.alloc(0x100)
+        s.w32(mob + 0x78, 7)
+        s.w32(boss + 0x78, 8)
+        s.w8(boss + 0xB4, 1)
+        s.w32(tathu + 0x78, 50)
+        ctypes.c_uint16.from_address(tathu + 0xB0).value = 2
+        s.set_tasks([(1, 0, 1, 50, 30)])
+        for cave, acc, skip in (("dgj_filter", "dgj_accept", "dgj_skip"), ("dgl_filter", "dgl_accept", "dgl_skip")):
+            expect(cave, boss, False, {}, acc, None, "tắt --mob: đánh cả boss")
+            expect(cave, mob, False, {"cfg_mob": 1}, acc, None, "quái thường")
+            expect(cave, boss, False, {"cfg_mob": 1}, skip, None, "boss")
+            expect(cave, tathu, False, {"cfg_mob": 1}, acc, None, "con tà thú của nhiệm vụ")
+        s.set_map(163)
+        expect("dgj_filter", boss, False, {"cfg_mob": 1, "cfg_stage": 1}, "dgj_accept", None, "Thí Luyện: đánh hết")
+        expect("dgj_filter", boss, False, {"cfg_mob": 1}, "dgj_skip", None, "Thí Luyện, tắt tự qua ải")
+    finally:
+        s.close()
+    print(f"    {n} tình huống")
+
+
+def test_menu(orig, out):
+    print("[7] Chạy thật menu \"Mod HVNJ\" (hvnj_menu.c)")
+    if os.name != "nt":
+        print("    bỏ qua (không phải Windows)")
+        return
+    s = CaveSim(kernel32(), out, "menu")
+    try:
+        def state():
+            return [s.get_cfg(k) for k in CFG_TOGGLES]
+
+        def pref(t, accept=0, lo=0, hi=0):
+            return "4" + "".join("1" if x else "0" for x in t) + chr(97 + accept) + chr(97 + lo) + chr(97 + hi)
+
+        def menu_ok(menu, t, accept=0, lo=0, hi=0):
+            want = [(("[x] " if on else "[   ] ") + P.MENU_ITEMS[i], ACT + 1 + i) for i, on in enumerate(t)]
+            if hi:
+                want += [(f"Luyện đá lên cấp: {hi} (cất vào rương)", ACT + 10), (f"Luyện đá từ cấp: {lo}", ACT + 11)]
+            else:
+                want += [("Luyện đá lên cấp: mọi cấp, không cất rương", ACT + 10)]
+            want += [(f"Option nhận nhiệm vụ ở NPC: {accept}", ACT + 12), ("Đóng", ACT + 13)]
+            return menu == want
+
+        # dòng "Mod HVNJ" trong menu nhân vật
+        lst = s.alloc(0x40)
+        s.lists[lst] = []
+        ret = s.menuchar(lst)
+        check(ret == s.ms and [s.iws[i] for i in s.lists[lst]] == [("Mod HVNJ", ACT)],
+              f"menu nhân vật phải có thêm dòng Mod HVNJ và trả về ms.dkz(): {[s.iws.get(i) for i in s.lists[lst]]}")
+        # mở menu: mặc định tắt hết, chưa lưu gì
+        s.action(ACT)
+        check(len(s.shown) == 1 and menu_ok(s.shown[-1], [0] * 8) and not s.prefs,
+              f"mở menu: {s.shown[-1] if s.shown else None} {s.prefs}")
+        # tick từng dòng
+        check(not any("xu" in c.split() for c, _a in s.shown[-1]), "menu không còn dòng trả bằng xu")
+        t = [0] * 8
+        for i in range(8):
+            s.action(ACT + 1 + i)
+            t[i] = 1
+            check(state() == t and s.prefs.get("HVNJ_MOD") == pref(t) and menu_ok(s.shown[-1], t),
+                  f"tick dòng {i + 1}: cfg {state()} prefs {s.prefs.get('HVNJ_MOD')} menu {s.shown[-1][i]}")
+        s.action(ACT + 1)
+        t[0] = 0
+        check(state() == t and s.prefs["HVNJ_MOD"] == pref(t), "bỏ tick dòng 1")
+        # bỏ tick thì xoá trạng thái dở dang
+        s.set_cfg(q_engaged=1, r_pending=1, s_active=1, p_active=1)
+        for i in (1, 4, 6, 7):
+            s.action(ACT + 1 + i)
+            s.action(ACT + 1 + i)
+        check([s.get_cfg(k) for k in ("q_engaged", "r_pending", "s_active", "p_active")] == [0, 0, 0, 0],
+              "tick / bỏ tick xoá trạng thái đang chạy của tính năng")
+        # cấp đá: mọi cấp -> 2 .. 12 -> mọi cấp; từ cấp vòng 1 .. cấp đích - 1
+        for _ in range(5):
+            s.action(ACT + 10)
+        check((s.get_cfg("cfg_stone_lo"), s.get_cfg("cfg_stone_hi")) == (1, 6) and menu_ok(s.shown[-1], t, 0, 1, 6),
+              f"lên cấp 6: {s.shown[-1][9:]}")
+        s.action(ACT + 11)
+        s.action(ACT + 11)
+        check(s.get_cfg("cfg_stone_lo") == 3 and s.prefs["HVNJ_MOD"] == pref(t, 0, 3, 6), "từ cấp 3")
+        for _ in range(3):
+            s.action(ACT + 11)
+        check(s.get_cfg("cfg_stone_lo") == 1, "từ cấp quay vòng về 1 (phải < cấp đích)")
+        for _ in range(6):
+            s.action(ACT + 10)
+        check(s.get_cfg("cfg_stone_hi") == 12, "tới cấp 12")
+        s.action(ACT + 10)
+        check((s.get_cfg("cfg_stone_lo"), s.get_cfg("cfg_stone_hi")) == (0, 0) and menu_ok(s.shown[-1], t),
+              "sau cấp 12 về mọi cấp")
+        for _ in range(5):
+            s.action(ACT + 12)
+        check(s.get_cfg("cfg_accept") == 1 and menu_ok(s.shown[-1], t, 1), "option nhận nhiệm vụ vòng 0..3")
+        saved = s.prefs["HVNJ_MOD"]
+        n_shown = len(s.shown)
+        s.action(ACT + 13)
+        check(len(s.shown) == n_shown and s.prefs["HVNJ_MOD"] == saved, "Đóng: không mở lại, không lưu")
+        # lệnh của game vẫn tới mo.djh nguyên tham số
+        s.action(1007, p=0x77)
+        s.action(ACT + 32, p=0x78)
+        check(s.djh == [(s.mo, 1007, 0x77), (s.mo, ACT + 32, 0x78)] and len(s.shown) == n_shown,
+              f"lệnh của game chuyển nguyên cho mo.djh: {s.djh}")
+        # đọc lại PlayerPrefs khi vào game
+        load = F(None)(s.sym("mod_cfg_load"))
+        s.prefs["HVNJ_MOD"] = pref([1, 0, 1, 0, 1, 0, 1, 1], 2, 3, 7)
+        s.set_cfg(m_loaded=0, **{k: 0 for k in CFG_TOGGLES})
+        load()
+        check(state() == [1, 0, 1, 0, 1, 0, 1, 1] and s.get_cfg("m_loaded") == 1
+              and [s.get_cfg(k) for k in ("cfg_accept", "cfg_stone_lo", "cfg_stone_hi")] == [2, 3, 7],
+              f"đọc PlayerPrefs: {state()}")
+        # "3..." = chuỗi của bản có dòng "trả bằng xu": bỏ qua
+        for bad in ("3" + pref([1] * 8)[1:] + "a", pref([1] * 8)[:-1], "", pref([1] * 8, 0, 5, 1)):
+            s.prefs["HVNJ_MOD"] = bad
+            s.set_cfg(**{k: 0 for k in CFG_TOGGLES}, cfg_stone_lo=4, cfg_stone_hi=9)
+            load()
+            if bad.startswith("4") and len(bad) == 12:
+                check(state() == [1] * 8 and (s.get_cfg("cfg_stone_lo"), s.get_cfg("cfg_stone_hi")) == (4, 9),
+                      f"cấp đá sai trong PlayerPrefs phải bị bỏ qua: {bad}")
+            else:
+                check(state() == [0] * 8, f"chuỗi PlayerPrefs sai phải bị bỏ qua: {bad!r}")
+        # quest_tick tự đọc PlayerPrefs ở frame đầu tiên
+        s.prefs["HVNJ_MOD"] = pref([0, 0, 0, 0, 0, 1, 0, 0])
+        s.set_cfg(m_loaded=0, **{k: 0 for k in CFG_TOGGLES})
+        s.qtick(1000)
+        check(s.get_cfg("m_loaded") == 1 and state() == [0, 0, 0, 0, 0, 1, 0, 0], "quest_tick đọc PlayerPrefs")
+    finally:
+        s.close()
+
+
+def test_stone_logic(orig):
+    print("[8] Chạy thật stone_tick với nhân vật / hành trang giả")
+    if os.name != "nt":
+        print("    bỏ qua (không phải Windows)")
+        return
+    k32 = kernel32()
+    out = P.build(orig)
+    TOO_MUCH = 2**31 - 1        # bảng phí là int32; nhân vật giả có 10^9 yên
     n_cases = 0
 
-    def sim(name, xu=False, levels=P.STONE_LEVELS_ALL, **kw):
+    def sim(name, levels=(0, 0), **kw):
         nonlocal n_cases
         n_cases += 1
-        return CaveSim(k32, P.build(orig, {"stone"}, 0, stone_xu=xu, stone_levels=levels), name, **kw)
+        cfg = dict(cfg_stone=1, cfg_stone_lo=levels[0], cfg_stone_hi=levels[1])
+        return CaveSim(k32, out, name, cfg=cfg, **kw)
 
     def one(sends, cmd, idx, msg):
         ok = len(sends) == 1 and sends[0]["cmd"] == cmd and sends[0]["idx"] == idx
         return check(ok, f"{msg}: {[(s['cmd'], s['idx']) for s in sends]} (mong đợi cmd {cmd} {idx})")
+
+    s = sim("stone_off")
+    try:
+        s.set_cfg(cfg_stone=0)
+        s.set_bag([0, 0, 0, 0, None])
+        s.qtick(1000)
+        check(not s.sends, "chưa tick luyện đá: quest_tick không luyện")
+        s.set_cfg(cfg_stone=1)
+        s.qtick(1000)
+        check(len(s.sends) == 1, "tick luyện đá: quest_tick gọi stone_tick")
+    finally:
+        s.close()
 
     # 1. trả yên: 4 viên cấp 1 đầu tiên -> cấp 2; chờ, gửi lại, nghỉ 5 phút, server xử lý xong
     s = sim("yen")
@@ -805,7 +1053,8 @@ def test_stone_logic(orig):
             ("auto_off", lambda s: s.w8(s.statics["ca"] + 0x16, 0)),
             ("dead", lambda s: s.w32(s.char + 0x5C, 14)),
             ("popup", lambda s: s.w64(s.statics["hw"] + 0x128, s.ek_instance)),
-            ("poor", lambda s: (s.w64(s.char + 0x140, 5), s.w64(s.char + 0x150, 4)))):
+            ("poor", lambda s: (s.w64(s.char + 0x140, 0), s.w64(s.char + 0x150, 9))),
+            ("rich_xu", lambda s: (s.w64(s.char + 0x140, 10**9), s.w64(s.char + 0x150, 9)))):
         s = sim(name)
         try:
             s.set_bag([0, 0, 0, 0, "eq", None])
@@ -817,30 +1066,17 @@ def test_stone_logic(orig):
     try:
         s.set_bag([0, 0, 0, 0, None])
         s.w64(s.statics["hw"] + 0x128, s.alloc(0x40))             # popup khác đang mở
-        s.w64(s.char + 0x140, 5)
-        s.w64(s.char + 0x150, 5)
-        one(s.tick(), 20, [0, 1, 2, 3], "yên + xu vừa đủ phí, popup khác không cản")
+        s.w64(s.char + 0x140, 0)
+        s.w64(s.char + 0x150, 10)
+        one(s.tick(), 20, [0, 1, 2, 3], "riêng yên vừa đủ phí (không có xu), popup khác không cản")
     finally:
         s.close()
 
-    # 3. trả xu: không gộp đá khóa với đá không khóa, ưu tiên nhóm không khóa
-    s = sim("xu_locked", xu=True)
+    # 3. chỉ trả bằng yên (cmd 20), không bao giờ cmd 19 (xu); đá khóa / không khóa gộp chung
+    s = sim("yen_mixed_lock")
     try:
-        s.set_bag([0, (0, 1, 0), 0, (0, 1, 0), 0, (0, 1, 0), (0, 1, 0), None])
-        one(s.tick(), 19, [1, 3, 5, 6], "trả xu: 3 viên không khóa thì luyện 4 viên khóa")
-    finally:
-        s.close()
-    s = sim("xu_unlocked", xu=True)
-    try:
-        s.set_bag([(0, 1, 0), 0, (0, 1, 0), 0, (0, 1, 0), 0, (0, 1, 0), 0, None])
-        one(s.tick(), 19, [1, 3, 5, 7], "trả xu: ưu tiên 4 viên không khóa")
-    finally:
-        s.close()
-    s = sim("xu_poor", xu=True)
-    try:
-        s.set_bag([0, 0, 0, 0, None])
-        s.w64(s.char + 0x140, 5)
-        check(not s.tick(), "trả xu: không tính yên vào phí")
+        s.set_bag([0, (0, 1, 0), 0, (0, 1, 0), None])
+        one(s.tick(), 20, [0, 1, 2, 3], "đá khóa + không khóa luyện chung bằng yên")
     finally:
         s.close()
 
@@ -953,22 +1189,26 @@ def test_stone_logic(orig):
 
 
 def test_quest_logic(orig):
-    print("[7] Chạy thật quest_tick (nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ giả")
+    print("[9] Chạy thật quest_tick (nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ giả")
     if os.name != "nt":
         print("    bỏ qua (không phải Windows)")
         return
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.LoadLibraryExW.restype = ctypes.c_void_p
-    k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
-    k32.FreeLibrary.argtypes = [ctypes.c_void_p]
-    k32.VirtualProtect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    k32 = kernel32()
+    out = P.build(orig)
     n_cases = 0
     DAILY, TATHU = 0, 1
 
     def sim(name, feats):
         nonlocal n_cases
         n_cases += 1
-        return CaveSim(k32, P.build(orig, set(feats), 0), "q_" + name)
+        return CaveSim(k32, out, "q_" + name, cfg={"cfg_" + f: 1 for f in feats})
+
+    s = sim("all_off", [])
+    try:
+        _d, menus, dgf = s.engage()
+        check(not menus and not dgf and not s.dga, "chưa tick nhiệm vụ: không làm gì")
+    finally:
+        s.close()
 
     # 1. chỉ --tathu, chưa có nhiệm vụ, đứng cạnh NPC 25 ở trường -> nhận tà thú ở menu 1
     s = sim("accept_tathu", ["tathu"])
@@ -1057,21 +1297,97 @@ def test_quest_logic(orig):
     print(f"    {n_cases} tình huống")
 
 
+# ----------------------------------------------------------------------------- 10
+def test_cli(orig, legacy_path):
+    print("[10] CLI trên bản sao")
+    td = tempfile.mkdtemp()
+    dll = os.path.join(td, "GameAssembly.dll")
+    script = os.path.join(ROOT, "patch_skill_delay.py")
+    v3 = P.build(orig)
+
+    def run(*a):
+        r = subprocess.run([sys.executable, script, "--dll", dll, *a], capture_output=True, text=True, encoding="utf-8")
+        return r.returncode, r.stdout + r.stderr
+
+    def cur():
+        return open(dll, "rb").read()
+
+    try:
+        src = open(legacy_path, "rb").read() if legacy_path else legacy_build(orig, list(P.LEGACY_PATCHES))
+        open(dll, "wb").write(src)
+        rc, txt = run("--status")
+        check(rc == 0 and P.KIND_V1 in txt and "--install" in txt, f"--status trên v1: {txt}")
+        rc, txt = run("--mob")
+        check(rc == 0 and "không còn tác dụng" in txt and cur() == v3, f"lệnh cũ --mob trên v1 -> cài bản menu: {txt}")
+        check(sha(open(dll + ".bak", "rb").read()) == P.ORIGINAL_SHA256, ".bak là bản gốc")
+        # DLL còn 0.3s, không có .bak -> --status cảnh báo, --skill không ghi file, --install gỡ
+        os.remove(dll + ".bak")
+        open(dll, "wb").write(with_retired_skill(v3))
+        rc, txt = run("--status")
+        check(rc == 0 and "0.3s" in txt, f"--status cảnh báo 0.3s cũ: {txt}")
+        rc, txt = run("--skill")
+        check(rc == 0 and "đã bị gỡ" in txt and P.detect_retired(cur()) == {"skill"},
+              f"--skill chỉ báo đã gỡ, không ghi file: {txt}")
+        rc, txt = run("--install")
+        check(rc == 0 and cur() == v3 and "Mod HVNJ" in txt, f"--install gỡ 0.3s: {txt}")
+        rc, txt = run("--remove", "quest")
+        check(rc == 0 and "không còn tác dụng" in txt and cur() == v3, f"--remove chỉ báo, không ghi: {txt}")
+        rc, txt = run("--stone-levels", "1-3", "--stone-pay", "xu", "--accept-option", "1")
+        check(rc == 0 and "không còn tác dụng" in txt and cur() == v3, f"tùy chọn cũ: {txt}")
+        rc, txt = run("--status")
+        check(rc == 0 and P.KIND_V3 in txt and all(n in txt for n in P.MENU_ITEMS[:8]), f"--status: {txt}")
+        rc, txt = run()
+        check(rc == 0 and "--install" in txt and cur() == v3, "không tham số: in hướng dẫn")
+        rc, txt = run("--restore")
+        check(rc == 0 and sha(cur()) == P.ORIGINAL_SHA256, f"--restore: {txt}")
+        rc, txt = run("--status")
+        check(rc == 0 and P.KIND_ORIGINAL in txt, f"--status bản gốc: {txt}")
+        open(dll + ".bak", "wb").write(b"rac")
+        rc, txt = run("--all")
+        check(rc == 0 and os.path.exists(dll + ".bak.khong-phai-ban-goc") and cur() == v3,
+              f".bak hỏng được giữ lại: {txt}")
+        check(sha(open(dll + ".bak", "rb").read()) == P.ORIGINAL_SHA256, ".bak mới là bản gốc")
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def test_old_payload(paths):
+    """DLL v2 (chọn tính năng bằng script) -> nhận diện, khôi phục, nâng cấp lên bản menu."""
+    print("[11] Nâng cấp từ DLL v2 cũ")
+    for old_path in paths:
+        old = open(old_path, "rb").read()
+        kind, on = P.detect(old)
+        print(f"    {os.path.basename(old_path)}: {kind}, {sorted(on)}")
+        check(kind == P.KIND_V2 and on, f"{old_path}: phải nhận ra bản v2 và tính năng")
+        check(sha(P.strip_payload(old)) == P.ORIGINAL_SHA256, f"{old_path}: strip_payload")
+        td = tempfile.mkdtemp()
+        try:
+            dll = os.path.join(td, "GameAssembly.dll")
+            open(dll, "wb").write(old)
+            r = subprocess.run([sys.executable, os.path.join(ROOT, "patch_skill_delay.py"), "--dll", dll, "--install"],
+                               capture_output=True, text=True, encoding="utf-8")
+            check(r.returncode == 0 and open(dll, "rb").read() == P.build(P.strip_payload(old)),
+                  f"{old_path}: --install -> bản menu dựng từ gốc: {r.stdout}")
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--original", default=os.path.join(ROOT, "GameAssembly.dll.bak"))
     ap.add_argument("--legacy", help="DLL đã cài bản mod v1 (tùy chọn)")
-    ap.add_argument("--old-v2", help="DLL v2 dựng bằng payload cũ hơn (tùy chọn)")
+    ap.add_argument("--old-v2", nargs="+", default=[], help="DLL v2 cũ (tùy chọn, nhiều file)")
     args = ap.parse_args()
     orig = open(args.original, "rb").read()
     if sha(orig) != P.ORIGINAL_SHA256:
         sys.exit(f"{args.original} không phải bản gốc")
-    test_combinations(orig)
+    out = test_install(orig)
     test_legacy(orig, args.legacy)
-    full = P.build(orig, set(P.FEATURES), 0)
-    test_pe(full)
-    test_disasm(orig, full)
-    test_runtime(full)
+    test_pe(out)
+    test_disasm(orig, out)
+    test_runtime(out)
+    test_gates(orig, out)
+    test_menu(orig, out)
     test_stone_logic(orig)
     test_quest_logic(orig)
     test_cli(orig, args.legacy)

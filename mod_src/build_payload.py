@@ -1,12 +1,14 @@
 """Build payload cho ban mod HVNJ 186 (chi danh cho nguoi phat trien).
 
-- Assemble mod_src/hvnj_caves.asm bang ml64 (Visual Studio).
-- Doc file COFF .obj, resolve relocation theo RVA cua GameAssembly.dll goc.
+- Assemble mod_src/hvnj_caves.asm bang ml64 va bien dich mod_src/hvnj_menu.c
+  bang cl (Visual Studio, khong CRT).
+- Doc cac file COFF .obj, ghep section, resolve relocation theo RVA cua
+  GameAssembly.dll goc (symbol cua obj nay -> obj kia -> GAME_SYMBOLS).
 - Tao unwind info (.pdata) cho moi code cave, tinh byte cua cac hook.
 - Ghi ket qua vao khoi "GENERATED PAYLOAD" trong patch_skill_delay.py.
 
 Cach dung:
-    python mod_src/build_payload.py [--original duong_dan_dll_goc] [--ml64 duong_dan_ml64]
+    python mod_src/build_payload.py [--original duong_dan_dll_goc] [--ml64 duong_dan_ml64] [--cl duong_dan_cl]
 """
 import argparse
 import glob
@@ -20,6 +22,8 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ASM = os.path.join(HERE, "hvnj_caves.asm")
+CSRC = os.path.join(HERE, "hvnj_menu.c")
+PAYLOAD_VERSION = 3   # cfg_version: 3 = bat/tat tinh nang bang menu Mod trong game
 PATCHER = os.path.join(ROOT, "patch_skill_delay.py")
 
 ORIGINAL_SHA256 = "a17ddc0b955ca4c4ada07feac0d18a1d8f7232d64b6f654c405669419f92df25"
@@ -65,6 +69,35 @@ GAME_SYMBOLS = {
     "clo_store": 0x24B26F,
     "dgl_accept": 0x1BA4AB,
     "dgl_skip": 0x1BA5FD,
+    # diem quay lai / dich nhay goc cua cac cave chan theo co
+    "dgj_null": 0x1BA085,
+    "dgj_core1_back": 0x1B9DB7,
+    "dgj_core2_back": 0x1B9E55,
+    "dgj_core2_skip": 0x1B9EB4,
+    "ctq_cd1_back": 0x1927E9,
+    "ctq_cd2_back": 0x192919,
+    "cdy_back": 0x3612E7,
+    "cdq_back": 0x36094D,
+    "dek_keep_auto": 0x19C0A4,
+    "dek_back": 0x19C06A,
+    "bld_back": 0x477CC5,
+    "bld_block": 0x478098,
+    "lm_TypeInfo": 0xE5BF28,
+    # menu Mod (hvnj_menu.c + action_hook / menuchar_hook)
+    "mo_djh": 0x1E16C0,
+    "ms_dkz": 0x62A7A0,
+    "ms_dla": 0x62A810,
+    "il2cpp_string_new_utf16": 0x0DC990,
+    "list_iw_ctor": 0x56DD80,
+    "list_iw_add": 0xB30F70,
+    "iw_ctor_caption": 0x4E5E80,
+    "prefs_get_string": 0x675D70,
+    "prefs_set_string": 0x675E20,
+    "list_iw_TypeInfo": 0xE40378,
+    "list_iw_ctor_mi": 0xE3D510,
+    "list_iw_add_mi": 0xE3D550,
+    "iw_TypeInfo": 0xE5B128,
+    "__ImageBase": 0x0,
 }
 
 # Khoi cave chay ben trong frame cua ham game -> unwind info chained toi
@@ -74,15 +107,22 @@ CHAINED_BLOCKS = [
     ("dgj_filter", "dgj_filter_end", 0x1B9F11),
     ("clo_stage", "clo_stage_end", 0x24B5AC),
     ("dgl_filter", "dgl_filter_end", 0x1BA48E),
+    ("dgj_core1", "dgj_core1_end", 0x1B9DB1),
+    ("dgj_core2", "dgj_core2_end", 0x1B9E4B),
+    ("ctq_cd1", "ctq_cd1_end", 0x1927E2),
+    ("ctq_cd2", "ctq_cd2_end", 0x192912),
+    ("cdy_dlg", "cdy_dlg_end", 0x3612E0),
+    ("cdq_dlg", "cdq_dlg_end", 0x360946),
+    ("dek_trial", "dek_trial_end", 0x19C061),
+    ("bld_trial", "bld_trial_end", 0x477CBF),
 ]
 
-# Nhóm hook -> các tính năng cần nhóm đó (patcher cài nhóm nếu bật ít nhất 1 tính năng).
-HOOK_USERS = {
-    "core": ["mob", "stage"],
-    "mob": ["mob"],
-    "clo": ["stage", "party"],
-    "tick": ["quest", "party", "die", "stone", "tathu"],
-}
+# Bien cau hinh (offset trong .hvnjd) ghi vao PAYLOAD_CFG cho patcher / kiem thu.
+CFG_NAMES = ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party", "cfg_die", "cfg_stone",
+             "cfg_stone_lo", "cfg_stone_hi", "cfg_tathu", "cfg_trial")
+
+# Section COFF -> noi dat trong payload
+SKIP_SECTIONS = (".drectve", ".debug$S", ".debug$T", ".chks64", ".llvm_addrsig")
 
 SECTION_ALIGN = 0x1000
 FILE_ALIGN = 0x200
@@ -156,8 +196,8 @@ class Coff:
                 name = data[so:data.index(b"\0", so)].decode()
             else:
                 name = data[o:o + 8].rstrip(b"\0").decode()
-            value, secnum, _typ, sclass, naux = struct.unpack_from("<IhHBB", data, o + 8)
-            self.symbols.append(dict(name=name, value=value, sec=secnum, sclass=sclass))
+            value, secnum, typ, sclass, naux = struct.unpack_from("<IhHBB", data, o + 8)
+            self.symbols.append(dict(name=name, value=value, sec=secnum, sclass=sclass, type=typ))
             for _ in range(naux):
                 self.symbols.append(None)
             i += 1 + naux
@@ -166,22 +206,33 @@ class Coff:
         return [i for i, s in enumerate(self.sections) if s["name"] == prefix or s["name"].startswith(prefix + "$")]
 
 
-def run_ml64(ml64, asm, obj):
-    r = subprocess.run([ml64, "-nologo", "-c", "-Fo" + obj, asm], capture_output=True, text=True)
+def run(cmd, what):
+    env = dict(os.environ, MSYS_NO_PATHCONV="1")
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
-        sys.exit("ml64 loi:\n" + r.stdout + r.stderr)
+        sys.exit(f"{what} loi:\n" + r.stdout + r.stderr)
 
 
-def find_ml64():
+def run_ml64(ml64, asm, obj):
+    run([ml64, "-nologo", "-c", "-Fo" + obj, asm], "ml64")
+
+
+def run_cl(cl, src, obj):
+    # khong CRT, khong stack cookie / probe, chuoi L"" UTF-16 tu nguon UTF-8
+    run([cl, "-nologo", "-c", "-O1", "-GS-", "-Gs1000000", "-Zl", "-GR-", "-EHs-c-", "-utf-8", "-W4", "-WX",
+         "-Fo" + obj, src], "cl")
+
+
+def find_tool(exe):
     pats = [
-        r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\ml64.exe",
-        r"C:\Program Files (x86)\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\ml64.exe",
+        rf"C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\{exe}",
+        rf"C:\Program Files (x86)\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\{exe}",
     ]
     for p in pats:
         hits = sorted(glob.glob(p))
         if hits:
             return hits[-1]
-    sys.exit("Khong tim thay ml64.exe, dung --ml64 de chi duong dan")
+    sys.exit(f"Khong tim thay {exe}, dung --ml64 / --cl de chi duong dan")
 
 
 def find_original():
@@ -191,61 +242,95 @@ def find_original():
     sys.exit("Khong tim thay GameAssembly.dll goc (sha256 khong khop), dung --original")
 
 
+def section_kind(name):
+    if name in SKIP_SECTIONS:
+        return None
+    for kind in ("text", "rdata", "xdata", "pdata", "data", "bss"):
+        if name == "." + kind or name.startswith("." + kind + "$"):
+            return kind
+    raise AssertionError(f"section {name} chua ho tro")
+
+
+def section_align(chars):
+    n = (chars >> 20) & 0xF
+    return 1 << (n - 1) if n else 16
+
+
 # ----------------------------------------------------------------------------- build
-def build(original_path, ml64):
+def build(original_path, ml64, cl):
     orig = open(original_path, "rb").read()
     assert hashlib.sha256(orig).hexdigest() == ORIGINAL_SHA256, "DLL goc khong dung phien ban"
     pe = PE(orig)
 
     with tempfile.TemporaryDirectory() as td:
-        obj_path = os.path.join(td, "hvnj_caves.obj")
-        run_ml64(ml64, ASM, obj_path)
-        coff = Coff(open(obj_path, "rb").read())
+        asm_obj = os.path.join(td, "hvnj_caves.obj")
+        c_obj = os.path.join(td, "hvnj_menu.obj")
+        run_ml64(ml64, ASM, asm_obj)
+        run_cl(cl, CSRC, c_obj)
+        objs = [Coff(open(asm_obj, "rb").read()), Coff(open(c_obj, "rb").read())]
 
-    text_idx = coff.find(".text")
-    data_idx = coff.find(".data")
-    xdata_idx = coff.find(".xdata")
-    pdata_idx = coff.find(".pdata")
-    assert len(text_idx) == 1 and len(data_idx) == 1, [s["name"] for s in coff.sections]
+    # --- phan loai section; .data cua asm phai dung dau .hvnjd (cfg_block o offset 0)
+    secs = {k: [] for k in ("text", "rdata", "xdata", "pdata", "data", "bss")}
+    for oi, coff in enumerate(objs):
+        for si, sec in enumerate(coff.sections):
+            kind = section_kind(sec["name"])
+            if kind:
+                secs[kind].append((oi, si))
+    assert secs["data"][0] == (0, objs[0].find(".data")[0]) and len(objs[0].find(".data")) == 1
 
     code_rva = pe.size_of_image
-    # --- bo tri section code: .text | .xdata (ml64) | unwind chained
-    layout = {}  # coff section index -> rva
+    layout = {}  # (obj, section) -> rva
     code = bytearray()
-    layout[text_idx[0]] = code_rva
-    code += coff.sections[text_idx[0]]["raw"]
-    for xi in xdata_idx:
-        code += bytes(align(len(code), 4) - len(code))
-        layout[xi] = code_rva + len(code)
-        code += coff.sections[xi]["raw"]
+    for kind in ("text", "rdata", "xdata"):
+        for oi, si in secs[kind]:
+            sec = objs[oi].sections[si]
+            code += bytes(align(len(code), section_align(sec["chars"])) - len(code))
+            layout[(oi, si)] = code_rva + len(code)
+            code += sec["raw"]
     chained_off = align(len(code), 4)
     code += bytes(chained_off - len(code) + 16 * len(CHAINED_BLOCKS))
     code_vsize = len(code)
     data_rva = code_rva + align(code_vsize, SECTION_ALIGN)
-    data = bytearray(coff.sections[data_idx[0]]["raw"])
-    layout[data_idx[0]] = data_rva
+    data = bytearray()
+    for kind in ("data", "bss"):
+        for oi, si in secs[kind]:
+            sec = objs[oi].sections[si]
+            data += bytes(align(len(data), section_align(sec["chars"])) - len(data))
+            layout[(oi, si)] = data_rva + len(data)
+            data += sec["raw"]
     data_vsize = max(len(data), 0x100)
 
-    def sym_rva(si):
-        s = coff.symbols[si]
-        if s["sec"] > 0:
-            base = layout.get(s["sec"] - 1)
-            assert base is not None, f"symbol {s['name']} o section khong duoc bo tri"
-            return base + s["value"]
-        if s["name"] in GAME_SYMBOLS:
-            return GAME_SYMBOLS[s["name"]]
-        raise KeyError(f"symbol chua resolve: {s['name']}")
+    # moi ham C (ke ca ham static / ham la khong co .pdata) - de kiem thu disassemble het code C
+    c_funcs = sorted((layout[(1, s_["sec"] - 1)] + s_["value"], s_["name"]) for s_ in objs[1].symbols
+                     if s_ and s_["sec"] > 0 and (s_["type"] & 0x30) == 0x20 and (1, s_["sec"] - 1) in layout)
+    c_text_end = {layout[(1, si)]: layout[(1, si)] + len(objs[1].sections[si]["raw"]) for oi, si in secs["text"]
+                  if oi == 1}
+    c_funcs = [(a, next(e for b_, e in c_text_end.items() if b_ <= a < e), n) for a, n in c_funcs]
 
     publics = {}
-    for s in coff.symbols:
-        if s and s["sec"] > 0 and s["sclass"] == 2 and (s["sec"] - 1) in layout:
-            publics[s["name"]] = layout[s["sec"] - 1] + s["value"]
+    for oi, coff in enumerate(objs):
+        for s_ in coff.symbols:
+            if s_ and s_["sec"] > 0 and s_["sclass"] == 2 and (oi, s_["sec"] - 1) in layout:
+                assert s_["name"] not in publics, f"symbol trung: {s_['name']}"
+                publics[s_["name"]] = layout[(oi, s_["sec"] - 1)] + s_["value"]
 
-    def apply_relocs(idx, buf, buf_base_off):
-        for (va, si, typ) in coff.sections[idx]["relocs"]:
+    def sym_rva(oi, si):
+        s_ = objs[oi].symbols[si]
+        if s_["sec"] > 0:
+            base = layout.get((oi, s_["sec"] - 1))
+            assert base is not None, f"symbol {s_['name']} o section khong duoc bo tri"
+            return base + s_["value"]
+        if s_["name"] in publics:
+            return publics[s_["name"]]
+        if s_["name"] in GAME_SYMBOLS:
+            return GAME_SYMBOLS[s_["name"]]
+        raise KeyError(f"symbol chua resolve: {s_['name']}")
+
+    def apply_relocs(oi, si, buf, buf_base_off, here_base):
+        for (va, symi, typ) in objs[oi].sections[si]["relocs"]:
             p = buf_base_off + va
-            target = sym_rva(si)
-            here = layout[idx] + va
+            target = sym_rva(oi, symi)
+            here = here_base + va
             if typ == IMAGE_REL_AMD64_ADDR32NB:
                 add = struct.unpack_from("<I", buf, p)[0]
                 struct.pack_into("<I", buf, p, target + add)
@@ -260,17 +345,18 @@ def build(original_path, ml64):
             else:
                 raise AssertionError(f"reloc type {typ:#x} chua ho tro")
 
-    apply_relocs(text_idx[0], code, 0)
-    for xi in xdata_idx:
-        apply_relocs(xi, code, layout[xi] - code_rva)
-    assert not coff.sections[data_idx[0]]["relocs"]
+    for kind in ("text", "rdata", "xdata"):
+        for oi, si in secs[kind]:
+            apply_relocs(oi, si, code, layout[(oi, si)] - code_rva, layout[(oi, si)])
+    for kind in ("data", "bss"):
+        for oi, si in secs[kind]:
+            assert not objs[oi].sections[si]["relocs"], "du lieu khong duoc chua con tro"
 
-    # --- .pdata: entry cua ml64 + entry chained
+    # --- .pdata: entry cua ml64 / cl + entry chained
     pdata_entries = []
-    for pi in pdata_idx:
-        buf = bytearray(coff.sections[pi]["raw"])
-        layout[pi] = 0  # chi dung ADDR32NB
-        apply_relocs(pi, buf, 0)
+    for oi, si in secs["pdata"]:
+        buf = bytearray(objs[oi].sections[si]["raw"])
+        apply_relocs(oi, si, buf, 0, 0)  # chi dung ADDR32NB
         pdata_entries += [struct.unpack_from("<III", buf, 12 * k) for k in range(len(buf) // 12)]
 
     game_pdata = pe.pdata()
@@ -326,56 +412,57 @@ def build(original_path, ml64):
     hp(pdata_tail_off, b"".join(struct.pack("<III", *e) for e in pdata_entries))
     assert pdata_sec["va"] == pe.exc_rva
 
-    # --- hook vao code game
+    # --- hook vao code game (cai het; cfg_* trong game quyet dinh co chay hay khong)
     def rel32(src_next, target):
         return struct.pack("<i", target - src_next)
 
     S = publics
-    hooks = {
-        "core": [
-            # bo kiem tra lm.mit == null (khong con dung toi nhiem vu chinh)
-            (0x1B9DB1, "0F84CE020000", "660F1F440000"),
-            # ket thuc vong lap -> tra ve con quai tot nhat
-            (0x1B9DFC, "0F8D83020000", "0F8D" + rel32(0x1B9DFC + 6, S["dgj_ret"]).hex()),
-            # bo qua kiem tra "quai cua nhiem vu chinh" (doc maw[mit+1] co the IndexOutOfRange)
-            (0x1B9E4B, "8B70", "EB67"),
-            # loc quai tinh anh/thu linh/boss + cho phep danh het trong Thi Luyen
-            (0x1B9F11, "488B0D1020CA00F6813301000002740E4439A1E0000000750" + "5E8A125F2FF",
-             "E9" + rel32(0x1B9F16, S["dgj_filter"]).hex() + "CC" * 25),
-        ],
-        "mob": [
-            # mo.dgl (auto nhiem vu): bo qua tinh anh/thu linh/boss, tru con ta thu cua nhiem vu ta thu
-            (0x1BA485, "3968440F846F010000488B0D931ACA00F6813301000002740D39A9E00000007505E825" + "20F2FF",
-             "3968440F846F010000" + "E9" + rel32(0x1BA493, S["dgl_filter"]).hex() + "CC" * 24),
-        ],
-        "clo": [
-            # lm.clo: chọn mục tiêu auto (đánh theo nhóm, tự qua ải Thí Luyện)
-            (0x24B5AC, "E8DFE6F6FFE9B9FCFFFF", "E9" + rel32(0x24B5B1, S["clo_stage"]).hex() + "CC" * 5),
-        ],
-        "tick": [
-            # mo.ctq: gọi mỗi frame (luyện đá, chết - quay về, đánh theo nhóm, auto nhiệm vụ ngày)
-            (0x19495E, "E84D0D0200", "E8" + rel32(0x194963, S["quest_tick"]).hex()),
-        ],
-    }
-    assert set(hooks) == set(HOOK_USERS)
-    for feat, lst in hooks.items():
-        for rva, o, p in lst:
-            ob, pb = bytes.fromhex(o), bytes.fromhex(p)
-            assert len(ob) == len(pb), (feat, hex(rva))
-            off = pe.rva_to_off(rva)
-            assert orig[off:off + len(ob)] == ob, f"byte goc khong khop tai {rva:#x}"
 
-    data_base = layout[data_idx[0]]
-    cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party",
-                                         "cfg_die", "cfg_stone", "cfg_stone_xu", "cfg_stone_lo", "cfg_stone_hi",
-                                         "cfg_tathu")}
+    def jmp(site, n, target):
+        return "E9" + rel32(site + 5, target).hex() + "CC" * (n - 5)
+
+    hooks = [
+        # mo.dgj: chon quai cho auto (ne quai / tu qua ai)
+        (0x1B9DB1, "0F84CE020000", jmp(0x1B9DB1, 6, S["dgj_core1"])),
+        (0x1B9DFC, "0F8D83020000", "0F8D" + rel32(0x1B9DFC + 6, S["dgj_ret"]).hex()),
+        (0x1B9E4B, "8B7078488B05D320CA00", jmp(0x1B9E4B, 10, S["dgj_core2"])),
+        (0x1B9F11, "488B0D1020CA00F6813301000002740E4439A1E0000000750" + "5E8A125F2FF",
+         jmp(0x1B9F11, 30, S["dgj_filter"])),
+        # mo.dgl (auto nhiem vu): ne tinh anh/thu linh/boss, tru con ta thu cua nhiem vu ta thu
+        (0x1BA485, "3968440F846F010000488B0D931ACA00F6813301000002740D39A9E00000007505E825" + "20F2FF",
+         "3968440F846F010000" + jmp(0x1BA48E, 29, S["dgl_filter"])),
+        # lm.clo: chon muc tieu auto (danh theo nhom, tu qua ai Thi Luyen)
+        (0x24B5AC, "E8DFE6F6FFE9B9FCFFFF", jmp(0x24B5AC, 10, S["clo_stage"])),
+        # mo.ctq: goi moi frame (luyen da, chet - quay ve, danh theo nhom, auto nhiem vu)
+        (0x19495E, "E84D0D0200", "E8" + rel32(0x194963, S["quest_tick"]).hex()),
+        # chet: dem nguoc 15 -> 1, hop thoai 500 -> 2 (mo.ctq, hw.cdy, hw.cdq)
+        (0x1927E2, "C680520100000F", jmp(0x1927E2, 7, S["ctq_cd1"])),
+        (0x192912, "C680520100000F", jmp(0x192912, 7, S["ctq_cd2"])),
+        (0x3612E0, "C7413CF4010000", jmp(0x3612E0, 7, S["cdy_dlg"])),
+        (0x360946, "C74040F4010000", jmp(0x360946, 7, S["cdq_dlg"])),
+        # Thi Luyen map 161: mo.dek khong tat Auto, eq.bld khong chan tim duong
+        (0x19C061, "7541488B05EE00CC00", jmp(0x19C061, 9, S["dek_trial"])),
+        (0x477CBF, "0F84D3030000", jmp(0x477CBF, 6, S["bld_trial"])),
+        # menu Mod: lenh menu -> action_hook; them dong "Mod HVNJ" vao menu nhan vat
+        (0x4E6027, "E894B6CFFF", "E8" + rel32(0x4E602C, S["action_hook"]).hex()),
+        (0x1EA0BA, "E8E1064400", "E8" + rel32(0x1EA0BF, S["menuchar_hook"]).hex()),
+    ]
+    for rva, o, p in hooks:
+        ob, pb = bytes.fromhex(o), bytes.fromhex(p)
+        assert len(ob) == len(pb), hex(rva)
+        off = pe.rva_to_off(rva)
+        assert orig[off:off + len(ob)] == ob, f"byte goc khong khop tai {rva:#x}"
+
+    data_base = layout[secs["data"][0]]
+    assert data[S["cfg_block"] - data_base + 4] == PAYLOAD_VERSION, "cfg_version trong asm != PAYLOAD_VERSION"
+    cfg = {k: S[k] - data_base for k in CFG_NAMES}
     return dict(
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),
         code_rva=code_rva, data_rva=data_rva, code_raw=code_raw, data_raw=data_raw,
         header_patches=[(o, a.hex(), b.hex()) for (o, a, b) in header_patches],
         hooks=hooks, cfg=cfg, publics={k: v for k, v in sorted(S.items(), key=lambda kv: kv[1])},
-        pdata=pdata_entries, file_size=len(orig),
+        pdata=pdata_entries, file_size=len(orig), c_funcs=c_funcs,
     )
 
 
@@ -386,6 +473,7 @@ def emit(p):
 
     lines = [
         "# === BEGIN GENERATED PAYLOAD (mod_src/build_payload.py - khong sua tay) ===",
+        f"PAYLOAD_VERSION = {PAYLOAD_VERSION}",
         f"PAYLOAD_CODE_RVA = {p['code_rva']:#x}",
         f"PAYLOAD_DATA_RVA = {p['data_rva']:#x}",
         f"PAYLOAD_CODE_RAW = {p['code_raw']:#x}",
@@ -399,16 +487,13 @@ def emit(p):
         "PAYLOAD_CFG = {" + ", ".join(f"'{k}': {v:#x}" for k, v in p["cfg"].items()) + "}",
         "PAYLOAD_SYMBOLS = {" + ", ".join(f"'{k}': {v:#x}" for k, v in p["publics"].items()) + "}",
         "PAYLOAD_PDATA = [" + ", ".join(f"({a:#x}, {b:#x}, {c:#x})" for a, b, c in p["pdata"]) + "]",
+        "PAYLOAD_C_FUNCS = [" + ", ".join(f"({a:#x}, {b:#x}, '{n}')" for a, b, n in p["c_funcs"]) + "]",
         "PAYLOAD_HEADER_PATCHES = [",
     ]
     lines += [f"    ({o:#x}, '{a}', '{b}')," for (o, a, b) in p["header_patches"]]
-    lines += ["]", "PAYLOAD_HOOKS = {"]
-    for feat, lst in p["hooks"].items():
-        lines.append(f"    '{feat}': [")
-        lines += [f"        ({rva:#x}, '{o.lower()}', '{pt.lower()}')," for rva, o, pt in lst]
-        lines.append("    ],")
-    lines += ["}", "PAYLOAD_HOOK_USERS = {" + ", ".join(f"'{g}': {tuple(u)!r}" for g, u in HOOK_USERS.items()) + "}"]
-    lines += ["# === END GENERATED PAYLOAD ==="]
+    lines += ["]", "PAYLOAD_HOOKS = ["]
+    lines += [f"    ({rva:#x}, '{o.lower()}', '{pt.lower()}')," for rva, o, pt in p["hooks"]]
+    lines += ["]", "# === END GENERATED PAYLOAD ==="]
     return "\n".join(lines)
 
 
@@ -416,8 +501,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--original")
     ap.add_argument("--ml64")
+    ap.add_argument("--cl")
     args = ap.parse_args()
-    payload = build(args.original or find_original(), args.ml64 or find_ml64())
+    payload = build(args.original or find_original(), args.ml64 or find_tool("ml64.exe"),
+                    args.cl or find_tool("cl.exe"))
     block = emit(payload)
     src = open(PATCHER, encoding="utf-8").read()
     b = src.index("# === BEGIN GENERATED PAYLOAD")
@@ -426,7 +513,8 @@ def main():
     print(f"OK: code {len(payload['code']):#x} bytes @ RVA {payload['code_rva']:#x}, "
           f"data @ {payload['data_rva']:#x}, {len(payload['pdata'])} pdata entries")
     for k, v in payload["publics"].items():
-        print(f"  {k:16} {v:#x}")
+        if not k.startswith("??_C@"):
+            print(f"  {k:20} {v:#x}")
 
 
 if __name__ == "__main__":

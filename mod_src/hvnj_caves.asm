@@ -13,6 +13,9 @@
 ;   - Lenh ngay sau moi lenh call KHONG duoc la jmp/ret/add rsp/pop (de bo
 ;     unwinder cua Windows khong nham la epilogue).
 ;   - Ham IL2CPP: tham so cuoi cung la MethodInfo* (truyen 0).
+;   - Moi tinh nang chi chay khi cfg_* tuong ung = 1. Cac cfg nay do menu Mod
+;     trong game bat/tat (hvnj_menu.c, luu bang PlayerPrefs); mac dinh tat het,
+;     khi tat het thi moi hook deu chay dung nhu code goc cua game.
 ; =============================================================================
 OPTION CASEMAP:NONE
 
@@ -42,6 +45,13 @@ EXTERN il2cpp_class_init:PROC   ; chay static constructor cua class (Il2CppClass
 EXTERN il2cpp_object_new:PROC   ; object_new(Il2CppClass*)
 EXTERN il2cpp_array_new:PROC    ; array_new_specific(Il2CppClass* arrayClass, length)
 EXTERN il2cpp_iface_invoke1:PROC ; InterfaceActionInvoker1: (slot, interface, obj, arg)
+EXTERN mo_djh:PROC              ; mo.djh(int idAction, lh p) - GameScr.perform
+EXTERN ms_dkz:PROC              ; static ms ms.dkz() - menu popup chung
+
+; ---- Ham C (hvnj_menu.c) ----------------------------------------------------
+EXTERN mod_cfg_load:PROC        ; doc lua chon tu PlayerPrefs (1 lan)
+EXTERN mod_action:PROC          ; int mod_action(int action) - xu ly lenh cua menu Mod
+EXTERN mod_menu_add_entry:PROC  ; void mod_menu_add_entry(List<iw>* list) - them dong "Mod HVNJ"
 
 ; ---- Con tro TypeInfo (Il2CppClass*), static fields o +0B8h -----------------
 EXTERN ca_TypeInfo:QWORD        ; ca.fxf (+16h) = trang thai nut Auto
@@ -62,11 +72,27 @@ EXTERN dgj_epilogue_tail:PROC   ; mo.dgj: epilogue, ngay sau "xor eax, eax"
 EXTERN clo_store:PROC           ; lm.clo: "mov [rbx+200h], rax" roi return
 EXTERN dgl_accept:PROC          ; mo.dgl: quai hop le -> tinh khoang cach
 EXTERN dgl_skip:PROC            ; mo.dgl: bo qua quai nay (inc edi; vong lap)
+EXTERN dgj_null:PROC            ; mo.dgj: "tra ve null" (dich goc cua cac lenh nhay da thay)
+EXTERN dgj_core2_back:PROC      ; mo.dgj: sau "mov rax, lm_TypeInfo" (kiem tra quai nhiem vu chinh)
+EXTERN dgj_core2_skip:PROC      ; mo.dgj: bo qua kiem tra quai nhiem vu chinh
+EXTERN dgj_core1_back:PROC      ; mo.dgj: sau "je" kiem tra lm.mit == null
+EXTERN ctq_cd1_back:PROC        ; mo.ctq: sau "mov byte [rax+152h], 15" (lan 1)
+EXTERN ctq_cd2_back:PROC        ; mo.ctq: sau "mov byte [rax+152h], 15" (lan 2)
+EXTERN cdy_back:PROC            ; hw.cdy: sau "mov dword [rcx+3Ch], 500"
+EXTERN cdq_back:PROC            ; hw.cdq: sau "mov dword [rax+40h], 500"
+EXTERN dek_keep_auto:PROC       ; mo.dek: dich cua "jne" (khong tat Auto)
+EXTERN dek_back:PROC            ; mo.dek: sau "mov rax, mo_TypeInfo"
+EXTERN bld_back:PROC            ; eq.bld: sau "je" chan tim duong trong map 161
+EXTERN bld_block:PROC           ; eq.bld: dich cua "je" (chan tim duong)
+EXTERN lm_TypeInfo:QWORD        ; lm
 
 PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end, dgl_filter, dgl_filter_end
-PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick
-PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone, cfg_stone_xu
-PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu
+PUBLIC ctq_cd1, ctq_cd1_end, ctq_cd2, ctq_cd2_end, cdy_dlg, cdy_dlg_end, cdq_dlg, cdq_dlg_end
+PUBLIC dek_trial, dek_trial_end, bld_trial, bld_trial_end, dgj_core1, dgj_core1_end, dgj_core2, dgj_core2_end
+PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick, action_hook, menuchar_hook
+PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone
+PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu, cfg_trial, m_loaded
+PUBLIC q_engaged, r_pending, r_active, p_active, st_party_map, st_empty_since, s_active, s_wait_until, s_fails
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
 STATICS         EQU 0B8h        ; Il2CppClass::static_fields
@@ -89,13 +115,11 @@ LA_MAP          EQU 3Ch         ; la.mak
 MT_TEMPLATE     EQU 78h         ; mt: template id (mo.dgl so voi la.maj)
 TASK_DAILY      EQU 0           ; la.mad: nhiem vu hang ngay (NPC 25 menu 0)
 TASK_TATHU      EQU 1           ; la.mad: nhiem vu ta thu (NPC 25 menu 1, xem mo.dgd)
-LM_XU           EQU 140h        ; lm.mie (long)
-LM_YEN          EQU 150h        ; lm.mig (long)
+LM_YEN          EQU 150h        ; lm.mig (long). Xu (lm.mie, 140h) KHONG bao gio duoc dung
 LM_BAG          EQU 1B8h        ; lm.miv: jr[] hanh trang
 LM_BOX          EQU 1C0h        ; lm.miw: jr[] ruong do (null khi chua mo ruong lan nao)
 JR_TEMPLATE     EQU 10h         ; jr.leu: js (template)
 JR_INDEX        EQU 28h         ; jr.ley: indexUI
-JR_LOCK         EQU 38h         ; jr.lfc: da khoa
 JR_SELECTED     EQU 5Eh         ; jr.lfn: dang nam trong o cua popup Luyen da
 JS_ID           EQU 10h         ; js.lfv (short)
 JS_TYPE         EQU 12h         ; js.lfw (sbyte)
@@ -107,6 +131,9 @@ LJ_SESSION      EQU 10h         ; lj.mdv: hs
 BC_WRITER       EQU 20h         ; bc.frf: bl
 CLASS_HAS_CCTOR EQU 133h        ; Il2CppClass: bit 2 = co static constructor
 CLASS_CCTOR_DONE EQU 0E0h       ; Il2CppClass: static constructor da chay
+
+MOD_ACT_BASE    EQU 48560000h   ; ma lenh cua menu Mod (game khong dung cac ma nay)
+MOD_ACT_COUNT   EQU 32
 
 STATUS_DEAD     EQU 14
 STATUS_DEADFLY  EQU 5
@@ -144,15 +171,15 @@ S_FREE_MAX      EQU 1           ; con <= 1 o trong thi coi la day
 S_MAX_STONES    EQU 24          ; popup Luyen da co 24 o
 S_MAX_ID        EQU 12          ; da id 0..11 (cap 1..12)
 ITEM_TYPE_STONE EQU 26
-CMD_STONE_XU    EQU 19          ; lj.cpc: luyen bang xu (giu trang thai khoa)
-CMD_STONE_YEN   EQU 20          ; lj.cpe: luyen bang yen (+ xu neu thieu), da ra bi khoa
+CMD_STONE_YEN   EQU 20          ; lj.cpe: luyen bang yen, da ra bi khoa (thieu yen server lay xu ->
+                                ; mod chi luyen khi rieng yen du phi). Khong dung cmd 19 (tra xu).
 CMD_BAG_TO_BOX  EQU 17          ; lj.itemBagToBox: cat vat pham tu hanh trang vao ruong
 
 ; =============================================================================
 _DATA SEGMENT ALIGN(16)
 cfg_block       LABEL BYTE
 cfg_magic       DB 'H','V','N','J'
-cfg_version     DB 2
+cfg_version     DB 3            ; 3 = bat/tat bang menu Mod trong game
 cfg_mob         DB 0            ; 1 = ne tinh anh/thu linh/boss
 cfg_stage       DB 0            ; 1 = tu qua ai Thi Luyen
 cfg_quest       DB 0            ; 1 = auto nhiem vu hang ngay
@@ -160,10 +187,11 @@ cfg_accept      DB 0            ; optionId cua menu(25, 0, ?) de NHAN nhiem vu
 cfg_party       DB 0            ; 1 = danh theo nhom (di theo + danh cung muc tieu truong nhom)
 cfg_die         DB 0            ; 1 = chet: ve lang ngay, quay lai map cu, bat lai Auto
 cfg_stone       DB 0            ; 1 = tu luyen da tai cho khi hanh trang day (luc Auto)
-cfg_stone_xu    DB 0            ; 1 = tra phi luyen bang xu, 0 = bang yen
 cfg_stone_lo    DB 0            ; --stone-levels A-B: dung da tu cap A, luyen len toi cap B
 cfg_stone_hi    DB 0            ;   (da cap B cat vao ruong); 0 = moi cap, khong cat ruong
 cfg_tathu       DB 0            ; 1 = auto nhiem vu ta thu (cung vong lap voi auto nhiem vu ngay)
+cfg_trial       DB 0            ; 1 = giu Auto & tim duong trong Thi Luyen (map 161)
+m_loaded        DB 0            ; 1 = da doc lua chon tu PlayerPrefs
 ALIGN 8
 st_map          DD 0
 st_party_map    DD -1           ; map co truong nhom o lan cuoi thay (danh theo nhom)
@@ -207,7 +235,7 @@ s_fails         DB 0
 s_sent_kind     DB 0            ; lenh truoc: 0 = luyen, 1 = cat ruong
 s_active        DB 0            ; 1 = dang trong dot luyen (bat dau khi hanh trang day)
                 DB 1 DUP (0)
-s_cnt           DD 2 * S_MAX_ID DUP (0)  ; so da theo [nhom][id]; nhom 1 = da khoa (chi khi tra xu)
+s_cnt           DD S_MAX_ID DUP (0)      ; so da theo id
 s_idx           DB S_MAX_STONES DUP (0)  ; indexUI cac vien se luyen
 _DATA ENDS
 
@@ -219,6 +247,17 @@ _TEXT SEGMENT ALIGN(16)
 ; boss nen --mob khong duoc ne no. Chi dung rcx, rdx, r8-r10 (ca hai cho goi
 ; deu da het gia tri trong cac thanh ghi volatile).
 ; -----------------------------------------------------------------------------
+; Nhay toi "off" neu ca --mob lan tu qua ai deu tat (phan loi chon quai khong
+; chay). Chi doi co.
+CORE_OFF MACRO off
+    LOCAL on
+    cmp     byte ptr [cfg_mob], 0
+    jne     on
+    cmp     byte ptr [cfg_stage], 0
+    je      off
+on:
+ENDM
+
 TATHU_TARGET MACRO yes
     LOCAL tt_loop, tt_next, tt_no
     mov     rcx, qword ptr [mo_TypeInfo]
@@ -262,11 +301,106 @@ ENDM
 ; -----------------------------------------------------------------------------
 ALIGN 16
 dgj_ret PROC
+    CORE_OFF dgj_null                   ; tat --mob va tu qua ai: tra ve null nhu goc
     movaps  xmm7, xmmword ptr [rsp+30h]
     mov     rax, r14
     jmp     dgj_epilogue_tail
 dgj_ret ENDP
 dgj_ret_end LABEL NEAR
+
+; -----------------------------------------------------------------------------
+; Phan "loi" cua chon quai (ne quai / tu qua ai can mo.dgj tra ve con quai gan
+; nhat ke ca khi khong co nhiem vu chinh). Chi chay khi bat --mob hoac tu qua
+; ai; tat ca hai thi giong het lenh goc.
+; 1B9DB1: "je dgj_null" khi lm.mit == null (khong co nhiem vu chinh).
+; -----------------------------------------------------------------------------
+ALIGN 16
+dgj_core1 PROC
+    jne     dgj_core1_back              ; co nhiem vu chinh: nhu goc
+    CORE_OFF dgj_null
+    jmp     dgj_core1_back
+dgj_core1 ENDP
+dgj_core1_end LABEL NEAR
+
+; 1B9E4B: "mov esi, [rax+78h] / mov rax, lm_TypeInfo" roi so quai voi nhiem vu chinh.
+ALIGN 16
+dgj_core2 PROC
+    CORE_OFF dgj_core2_orig
+    jmp     dgj_core2_skip              ; bo kiem tra (doc maw[mit+1] co the IndexOutOfRange)
+dgj_core2_orig:
+    mov     esi, dword ptr [rax+78h]
+    mov     rax, qword ptr [lm_TypeInfo]
+    jmp     dgj_core2_back
+dgj_core2 ENDP
+dgj_core2_end LABEL NEAR
+
+; -----------------------------------------------------------------------------
+; Chet: game dem nguoc mo.nib = 15 roi moi ve lang; hop thoai chet / dong hop
+; thoai 500 frame. Khi bat chet - quay ve: 1 va 2 (giong ban truoc).
+; -----------------------------------------------------------------------------
+ALIGN 16
+ctq_cd1 PROC
+    mov     byte ptr [rax+152h], 15
+    cmp     byte ptr [cfg_die], 0
+    je      ctq_cd1_back
+    mov     byte ptr [rax+152h], 1
+    jmp     ctq_cd1_back
+ctq_cd1 ENDP
+ctq_cd1_end LABEL NEAR
+
+ALIGN 16
+ctq_cd2 PROC
+    mov     byte ptr [rax+152h], 15
+    cmp     byte ptr [cfg_die], 0
+    je      ctq_cd2_back
+    mov     byte ptr [rax+152h], 1
+    jmp     ctq_cd2_back
+ctq_cd2 ENDP
+ctq_cd2_end LABEL NEAR
+
+ALIGN 16
+cdy_dlg PROC
+    mov     dword ptr [rcx+3Ch], 500
+    cmp     byte ptr [cfg_die], 0
+    je      cdy_back
+    mov     dword ptr [rcx+3Ch], 2
+    jmp     cdy_back
+cdy_dlg ENDP
+cdy_dlg_end LABEL NEAR
+
+ALIGN 16
+cdq_dlg PROC
+    mov     dword ptr [rax+40h], 500
+    cmp     byte ptr [cfg_die], 0
+    je      cdq_back
+    mov     dword ptr [rax+40h], 2
+    jmp     cdq_back
+cdq_dlg ENDP
+cdq_dlg_end LABEL NEAR
+
+; -----------------------------------------------------------------------------
+; Thi Luyen (map 161). mo.dek 19C061: "jne" (khong phai 161) -> giu Auto; khi
+; bat thi luon giu Auto. eq.bld 477CBF: "je" (la 161) -> chan tim duong; khi bat
+; thi khong chan.
+; -----------------------------------------------------------------------------
+ALIGN 16
+dek_trial PROC
+    jne     dek_keep_auto
+    cmp     byte ptr [cfg_trial], 0
+    jne     dek_keep_auto
+    mov     rax, qword ptr [mo_TypeInfo]
+    jmp     dek_back
+dek_trial ENDP
+dek_trial_end LABEL NEAR
+
+ALIGN 16
+bld_trial PROC
+    jne     bld_back
+    cmp     byte ptr [cfg_trial], 0
+    jne     bld_back
+    jmp     bld_block
+bld_trial ENDP
+bld_trial_end LABEL NEAR
 
 ; -----------------------------------------------------------------------------
 ; mo.dgj: loc tung con quai. rax = mt (con quai dang xet), r12 = 0.
@@ -305,6 +439,8 @@ dgj_filter_end LABEL NEAR
 ; -----------------------------------------------------------------------------
 ALIGN 16
 dgl_filter PROC
+    cmp     byte ptr [cfg_mob], 0
+    je      dgl_accept                  ; tat --mob: nhu goc
     cmp     word ptr [rax+MT_LEVELBOSS], 0
     jne     dgl_boss
     cmp     byte ptr [rax+MT_ISBOSS], 0
@@ -525,6 +661,10 @@ quest_tick PROC FRAME
     mov     rbx, rcx
     xor     edx, edx
     call    mo_dgd                      ; giu nguyen hanh vi goc
+    cmp     byte ptr [m_loaded], 0
+    jne     q_cfg_ready
+    call    mod_cfg_load                ; lan dau: doc lua chon menu Mod tu PlayerPrefs
+q_cfg_ready:
     cmp     byte ptr [cfg_stone], 0
     je      q_no_stone
     call    stone_tick
@@ -1219,9 +1359,8 @@ die_tick ENDP
 ; DUNG diem cua mot cap cao hon (= ti le 100%, khong mat da), uu tien cap
 ; thap nhat, toi da 24 vien, du phi (mc.ncx), roi gui packet giong nut "Luyen"
 ; cua popup Luyen da (ek.bjx -> lj.cpe / lj.cpc) nhung khong mo hop thoai:
-;   - tra yen: cmd 20, da ra bi khoa;
-;   - tra xu : cmd 19, chi gop da cung trang thai khoa de da khong khoa van
-;              khong khoa.
+;   chi tra bang YEN (cmd 20, da ra bi khoa) va chi khi rieng yen du phi:
+;   khong bao gio dung xu (thieu yen thi khong luyen).
 ; Hanh trang day thi bat dau mot dot luyen: luyen tung nhom, moi lan cho
 ; S_WAIT_MS de server cap nhat hanh trang, cu the cho toi khi khong con nhom
 ; nao luyen 100% duoc (da cap thap duoc nang dan len).
@@ -1343,7 +1482,7 @@ sk_hi_ok:
     ; ---- dem o trong va da theo [nhom][id] ----
     lea     rdi, [s_cnt]
     xor     eax, eax
-    mov     ecx, 2 * S_MAX_ID
+    mov     ecx, S_MAX_ID
     rep stosd
     movzx   r11d, byte ptr [cfg_stone_lo] ; r11d = id nho nhat duoc dung (= cap - 1)
     test    r11d, r11d
@@ -1387,12 +1526,6 @@ sk_scan_stone:
     jae     sk_scan_next                ; id < cap dich lon nhat (loai ca id am)
     cmp     edx, r11d
     jb      sk_scan_next                ; duoi cap thap nhat cua --stone-levels
-    cmp     byte ptr [cfg_stone_xu], 0
-    je      sk_scan_count
-    cmp     byte ptr [rax+JR_LOCK], 0
-    je      sk_scan_count
-    add     edx, S_MAX_ID               ; nhom da khoa
-sk_scan_count:
     inc     dword ptr [r10+rdx*4]
 sk_scan_next:
     inc     ecx
@@ -1465,13 +1598,12 @@ sk_check_full:
     mov     byte ptr [s_active], 1
 sk_plan:
 
-    ; ---- chon nhom da: rdi = hang dem cua nhom, ebp = cap dich t ----
+    ; ---- chon nhom da: rdi = so da theo id, ebp = cap dich t ----
     lea     rdi, [s_cnt]
-sk_group:
     mov     ebp, 1
 sk_target:
     cmp     ebp, r14d
-    jg      sk_next_group
+    jg      sk_idle
     movsxd  r8, dword ptr [r12+rbp*4+20h]   ; r8 = diem can = mc.nde[t]
     test    r8, r8
     jle     sk_next_target
@@ -1507,31 +1639,14 @@ sk_take_put:
     cmp     r11d, 2
     jb      sk_next_target
     movsxd  rax, dword ptr [r13+rbp*4+20h]  ; phi luyen ra da t
-    mov     rdx, qword ptr [rbx+LM_XU]
-    cmp     byte ptr [cfg_stone_xu], 0
-    jne     sk_fee
-    add     rdx, qword ptr [rbx+LM_YEN]
-sk_fee:
-    cmp     rax, rdx
-    jle     sk_found
+    cmp     rax, qword ptr [rbx+LM_YEN]
+    jle     sk_found                    ; chi tinh yen: khong de server lay xu bu vao
 sk_next_target:
     inc     ebp
     jmp     sk_target
-sk_next_group:
-    cmp     byte ptr [cfg_stone_xu], 0
-    je      sk_idle
-    lea     rax, [s_cnt + 4 * S_MAX_ID]
-    cmp     rdi, rax
-    je      sk_idle
-    mov     rdi, rax
-    jmp     sk_group
 
     ; ---- lay indexUI cac vien da chon ----
 sk_found:
-    lea     rax, [s_cnt + 4 * S_MAX_ID]
-    xor     r9d, r9d
-    cmp     rdi, rax
-    sete    r9b                         ; r9d = nhom (1 = da khoa)
     mov     r10d, dword ptr [rsi+18h]
     lea     rdi, [s_idx]
     xor     ecx, ecx
@@ -1552,14 +1667,6 @@ sk_pick:
     jae     sk_pick_next
     cmp     byte ptr [rax+JR_SELECTED], 0
     jne     sk_pick_next
-    cmp     byte ptr [cfg_stone_xu], 0
-    je      sk_pick_take
-    movzx   r8d, byte ptr [rax+JR_LOCK]
-    test    r8d, r8d
-    setnz   r8b
-    cmp     r8d, r9d
-    jne     sk_pick_next
-sk_pick_take:
     cmp     dword ptr [rsp+rdx*4+30h], 0
     je      sk_pick_next
     dec     dword ptr [rsp+rdx*4+30h]
@@ -1582,10 +1689,6 @@ sk_picked:
     mov     r14d, r11d                  ; r14d = so vien se gui
     mov     byte ptr [s_sent_kind], 0
     mov     dword ptr [rsp+28h], CMD_STONE_YEN
-    cmp     byte ptr [cfg_stone_xu], 0
-    je      sk_cmd_ok
-    mov     dword ptr [rsp+28h], CMD_STONE_XU
-sk_cmd_ok:
 
     ; ---- ek.gyo phai khac null: ham nhan ket qua cua game (lm.cyg) duyet mang nay ----
     lea     rcx, [ek_TypeInfo]
@@ -1689,6 +1792,49 @@ sk_done:
     pop     rbx
     ret
 stone_tick ENDP
+
+; -----------------------------------------------------------------------------
+; iw.cgd: thay cho "call mo.djh" (lenh menu khong co doi tuong xu ly rieng).
+; rcx = mo, edx = ma lenh, r8 = p. Ma lenh cua menu Mod -> mod_action, con lai
+; chuyen nguyen cho game.
+; -----------------------------------------------------------------------------
+ALIGN 16
+action_hook PROC FRAME
+    sub     rsp, 28h
+    .allocstack 28h
+    .endprolog
+    mov     eax, edx
+    sub     eax, MOD_ACT_BASE
+    cmp     eax, MOD_ACT_COUNT
+    jae     ah_game
+    mov     ecx, edx
+    call    mod_action
+    nop
+    add     rsp, 28h
+    ret
+ah_game:
+    add     rsp, 28h
+    jmp     mo_djh
+action_hook ENDP
+
+; -----------------------------------------------------------------------------
+; mo.doMenuChar: thay cho "call ms.dkz" ngay truoc khi hien menu nhan vat.
+; rsi cua ham goi = List<iw> menu nhan vat -> them dong "Mod HVNJ" vao cuoi,
+; roi tra ve ms.dkz() nhu lenh goc.
+; -----------------------------------------------------------------------------
+ALIGN 16
+menuchar_hook PROC FRAME
+    sub     rsp, 28h
+    .allocstack 28h
+    .endprolog
+    mov     rcx, rsi
+    call    mod_menu_add_entry
+    xor     ecx, ecx
+    call    ms_dkz
+    nop
+    add     rsp, 28h
+    ret
+menuchar_hook ENDP
 
 ; ---- hang so chi doc --------------------------------------------------------
 ALIGN 16
