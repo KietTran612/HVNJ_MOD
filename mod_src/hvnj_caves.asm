@@ -64,6 +64,7 @@ EXTERN clo_store:PROC           ; lm.clo: "mov [rbx+200h], rax" roi return
 PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end
 PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick
 PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone, cfg_stone_xu
+PUBLIC cfg_stone_lo, cfg_stone_hi
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
 STATICS         EQU 0B8h        ; Il2CppClass::static_fields
@@ -85,6 +86,7 @@ LA_MAP          EQU 3Ch         ; la.mak
 LM_XU           EQU 140h        ; lm.mie (long)
 LM_YEN          EQU 150h        ; lm.mig (long)
 LM_BAG          EQU 1B8h        ; lm.miv: jr[] hanh trang
+LM_BOX          EQU 1C0h        ; lm.miw: jr[] ruong do (null khi chua mo ruong lan nao)
 JR_TEMPLATE     EQU 10h         ; jr.leu: js (template)
 JR_INDEX        EQU 28h         ; jr.ley: indexUI
 JR_LOCK         EQU 38h         ; jr.lfc: da khoa
@@ -129,6 +131,7 @@ S_TICK_MS       EQU 1000        ; nhip kiem tra hanh trang
 S_WAIT_MS       EQU 3000        ; sau moi lan luyen, cho server cap nhat hanh trang
 S_IDLE_MS       EQU 30000       ; khong co cach luyen 100% / khong du tien -> xet lai sau 30s
 S_FAIL_MS       EQU 300000      ; server khong xu ly S_MAX_FAILS lan lien tiep -> nghi 5 phut
+S_BOX_FAIL_MS   EQU 1800000     ; server khong cho cat ruong -> 30 phut moi thu cat lai
 S_MAX_FAILS     EQU 2
 S_FREE_MAX      EQU 1           ; con <= 1 o trong thi coi la day
 S_MAX_STONES    EQU 24          ; popup Luyen da co 24 o
@@ -136,6 +139,7 @@ S_MAX_ID        EQU 12          ; da id 0..11 (cap 1..12)
 ITEM_TYPE_STONE EQU 26
 CMD_STONE_XU    EQU 19          ; lj.cpc: luyen bang xu (giu trang thai khoa)
 CMD_STONE_YEN   EQU 20          ; lj.cpe: luyen bang yen (+ xu neu thieu), da ra bi khoa
+CMD_BAG_TO_BOX  EQU 17          ; lj.itemBagToBox: cat vat pham tu hanh trang vao ruong
 
 ; =============================================================================
 _DATA SEGMENT ALIGN(16)
@@ -150,7 +154,9 @@ cfg_party       DB 0            ; 1 = danh theo nhom (di theo + danh cung muc ti
 cfg_die         DB 0            ; 1 = chet: ve lang ngay, quay lai map cu, bat lai Auto
 cfg_stone       DB 0            ; 1 = tu luyen da tai cho khi hanh trang day (luc Auto)
 cfg_stone_xu    DB 0            ; 1 = tra phi luyen bang xu, 0 = bang yen
-                DB 3 DUP (0)
+cfg_stone_lo    DB 0            ; --stone-levels A-B: dung da tu cap A, luyen len toi cap B
+cfg_stone_hi    DB 0            ;   (da cap B cat vao ruong); 0 = moi cap, khong cat ruong
+                DB 1 DUP (0)
 ALIGN 8
 st_map          DD 0
 st_party_map    DD -1           ; map co truong nhom o lan cuoi thay (danh theo nhom)
@@ -184,10 +190,13 @@ r_nav_tries     DB 0
                 DB 0
 s_last_tick     DQ 0
 s_wait_until    DQ 0
-s_sent_item     DQ 0            ; vien da dau tien cua lan luyen truoc (de biet server da xu ly chua)
+s_sent_item     DQ 0            ; vien da dau tien cua lenh truoc (de biet server da xu ly chua)
+s_box_wait_until DQ 0
 s_sent_slot     DD 0
 s_fails         DB 0
-                DB 3 DUP (0)
+s_sent_kind     DB 0            ; lenh truoc: 0 = luyen, 1 = cat ruong
+s_active        DB 0            ; 1 = dang trong dot luyen (bat dau khi hanh trang day)
+                DB 1 DUP (0)
 s_cnt           DD 2 * S_MAX_ID DUP (0)  ; so da theo [nhom][id]; nhom 1 = da khoa (chi khi tra xu)
 s_idx           DB S_MAX_STONES DUP (0)  ; indexUI cac vien se luyen
 _DATA ENDS
@@ -1067,10 +1076,15 @@ die_tick ENDP
 ;   - tra yen: cmd 20, da ra bi khoa;
 ;   - tra xu : cmd 19, chi gop da cung trang thai khoa de da khong khoa van
 ;              khong khoa.
-; Moi lan chi luyen 1 nhom; cho S_WAIT_MS de server cap nhat hanh trang roi
-; xet tiep. Neu sau S_MAX_FAILS lan hanh trang khong doi (server tu choi, vd
-; khong o gan NPC) thi nghi S_FAIL_MS. Bo qua da dang chon trong popup va khi
-; popup Luyen da dang mo.
+; Hanh trang day thi bat dau mot dot luyen: luyen tung nhom, moi lan cho
+; S_WAIT_MS de server cap nhat hanh trang, cu the cho toi khi khong con nhom
+; nao luyen 100% duoc (da cap thap duoc nang dan len).
+; --stone-levels A-B: chi dung da tu cap A, luyen dan len toi cap B; vien da
+; cap B duoc cat vao ruong do (cmd 17 giong lj.itemBagToBox) neu client da nap
+; ruong (lm.miw) va ruong con cho.
+; Neu sau S_MAX_FAILS lan hanh trang khong doi (server tu choi, vd khong o gan
+; NPC): luyen -> nghi S_FAIL_MS; cat ruong -> chi ngung cat S_BOX_FAIL_MS.
+; Bo qua da dang chon trong popup va khi popup Luyen da dang mo.
 ; -----------------------------------------------------------------------------
 ALIGN 16
 stone_tick PROC FRAME
@@ -1093,7 +1107,7 @@ stone_tick PROC FRAME
     sub     rsp, 68h
     .allocstack 68h
     .endprolog
-    ; [rsp+20h] FILETIME | [rsp+30h] so vien lay theo id (S_MAX_ID x DD)
+    ; [rsp+20h] FILETIME | [rsp+28h] cmd se gui | [rsp+30h] so vien lay theo id (S_MAX_ID x DD)
     lea     rcx, [rsp+20h]
     call    qword ptr [imp_GetSystemTimeAsFileTime]
     mov     rax, qword ptr [rsp+20h]
@@ -1169,6 +1183,13 @@ sk_no_popup:
     cmp     eax, ecx
     cmova   eax, ecx
     dec     eax
+    movzx   ecx, byte ptr [cfg_stone_hi] ; --stone-levels A-B: da ra toi da cap B (id B-1)
+    test    ecx, ecx
+    jz      sk_hi_ok
+    dec     ecx
+    cmp     eax, ecx
+    cmova   eax, ecx
+sk_hi_ok:
     cmp     eax, 1
     jl      sk_done
     mov     r14d, eax
@@ -1178,9 +1199,15 @@ sk_no_popup:
     xor     eax, eax
     mov     ecx, 2 * S_MAX_ID
     rep stosd
+    movzx   r11d, byte ptr [cfg_stone_lo] ; r11d = id nho nhat duoc dung (= cap - 1)
+    test    r11d, r11d
+    jz      sk_lo_ok
+    dec     r11d
+sk_lo_ok:
     lea     r10, [s_cnt]
     mov     r9d, dword ptr [rsi+18h]
     xor     edi, edi                    ; edi = so o trong
+    mov     ebp, -1                     ; ebp = o cua vien da dat cap B (de cat ruong)
     xor     ecx, ecx
 sk_scan:
     cmp     ecx, r9d
@@ -1196,11 +1223,24 @@ sk_scan_item:
     jz      sk_scan_next
     cmp     byte ptr [rdx+JS_TYPE], ITEM_TYPE_STONE
     jne     sk_scan_next
-    movsx   edx, word ptr [rdx+JS_ID]
-    cmp     edx, r14d
-    jae     sk_scan_next                ; id < cap dich lon nhat (loai ca id am)
     cmp     byte ptr [rax+JR_SELECTED], 0
     jne     sk_scan_next
+    movsx   edx, word ptr [rdx+JS_ID]
+    movzx   r8d, byte ptr [cfg_stone_hi]
+    test    r8d, r8d
+    jz      sk_scan_stone
+    dec     r8d
+    cmp     edx, r8d
+    jne     sk_scan_stone
+    test    ebp, ebp
+    jns     sk_scan_next
+    mov     ebp, ecx                    ; vien dau tien dat cap B
+    jmp     sk_scan_next
+sk_scan_stone:
+    cmp     edx, r14d
+    jae     sk_scan_next                ; id < cap dich lon nhat (loai ca id am)
+    cmp     edx, r11d
+    jb      sk_scan_next                ; duoi cap thap nhat cua --stone-levels
     cmp     byte ptr [cfg_stone_xu], 0
     je      sk_scan_count
     cmp     byte ptr [rax+JR_LOCK], 0
@@ -1212,10 +1252,10 @@ sk_scan_next:
     inc     ecx
     jmp     sk_scan
 sk_scanned:
-    ; ---- lan luyen truoc da duoc server xu ly chua? ----
+    ; ---- lenh truoc (luyen / cat ruong) da duoc server xu ly chua? ----
     mov     rax, qword ptr [s_sent_item]
     test    rax, rax
-    jz      sk_check_full
+    jz      sk_check_box
     mov     qword ptr [s_sent_item], 0
     mov     ecx, dword ptr [s_sent_slot]
     cmp     ecx, r9d
@@ -1224,17 +1264,60 @@ sk_scanned:
     jne     sk_changed
     inc     byte ptr [s_fails]
     cmp     byte ptr [s_fails], S_MAX_FAILS
-    jb      sk_check_full
+    jb      sk_check_box
     mov     byte ptr [s_fails], 0
+    cmp     byte ptr [s_sent_kind], 0
+    jne     sk_box_failed
+    mov     byte ptr [s_active], 0
     mov     rax, r15
     add     rax, S_FAIL_MS
     mov     qword ptr [s_wait_until], rax
     jmp     sk_done
+sk_box_failed:
+    mov     rax, r15                    ; server khong cho cat ruong: chi ngung cat, van luyen
+    add     rax, S_BOX_FAIL_MS
+    mov     qword ptr [s_box_wait_until], rax
+    jmp     sk_check_full
 sk_changed:
     mov     byte ptr [s_fails], 0
+
+    ; ---- cat vien da cap B vao ruong do ----
+sk_check_box:
+    test    ebp, ebp
+    js      sk_check_full
+    cmp     r15, qword ptr [s_box_wait_until]
+    jb      sk_check_full
+    mov     rax, qword ptr [rbx+LM_BOX]
+    test    rax, rax
+    jz      sk_check_full               ; client chua nap ruong (chua mo ruong lan nao)
+    mov     r9d, dword ptr [rax+18h]
+    xor     ecx, ecx
+sk_box_free:
+    cmp     ecx, r9d
+    jae     sk_check_full               ; ruong day
+    cmp     qword ptr [rax+rcx*8+20h], 0
+    je      sk_box_send
+    inc     ecx
+    jmp     sk_box_free
+sk_box_send:
+    mov     rax, qword ptr [rsi+rbp*8+20h]
+    mov     qword ptr [s_sent_item], rax
+    mov     dword ptr [s_sent_slot], ebp
+    mov     edx, dword ptr [rax+JR_INDEX]
+    mov     byte ptr [s_idx], dl
+    mov     r14d, 1
+    mov     byte ptr [s_sent_kind], 1
+    mov     dword ptr [rsp+28h], CMD_BAG_TO_BOX
+    jmp     sk_send
+
+    ; ---- dot luyen: bat dau khi hanh trang day, chay toi khi het nhom luyen duoc ----
 sk_check_full:
+    cmp     byte ptr [s_active], 0
+    jne     sk_plan
     cmp     edi, S_FREE_MAX
     ja      sk_done
+    mov     byte ptr [s_active], 1
+sk_plan:
 
     ; ---- chon nhom da: rdi = hang dem cua nhom, ebp = cap dich t ----
     lea     rdi, [s_cnt]
@@ -1351,6 +1434,12 @@ sk_picked:
     cmp     r11d, 2
     jb      sk_abort
     mov     r14d, r11d                  ; r14d = so vien se gui
+    mov     byte ptr [s_sent_kind], 0
+    mov     dword ptr [rsp+28h], CMD_STONE_YEN
+    cmp     byte ptr [cfg_stone_xu], 0
+    je      sk_cmd_ok
+    mov     dword ptr [rsp+28h], CMD_STONE_XU
+sk_cmd_ok:
 
     ; ---- ek.gyo phai khac null: ham nhan ket qua cua game (lm.cyg) duyet mang nay ----
     lea     rcx, [ek_TypeInfo]
@@ -1383,7 +1472,8 @@ sk_ek_ready:
     mov     rcx, qword ptr [rcx+STATICS]
     mov     qword ptr [rcx+EK_STANDS], rax
 sk_have_stands:
-    ; ---- gui packet: new Message(cmd), writeByte(indexUI) tung vien, session.zs(msg) ----
+sk_send:
+    ; ---- gui packet: new Message([rsp+28h]), writeByte(s_idx[0..r14d)), session.zs(msg) ----
     xor     ecx, ecx
     call    lj_cmy
     test    rax, rax
@@ -1403,11 +1493,7 @@ sk_have_stands:
     jz      sk_abort
     mov     rdi, rax                    ; rdi = Message
     mov     rcx, rax
-    mov     edx, CMD_STONE_YEN
-    cmp     byte ptr [cfg_stone_xu], 0
-    je      sk_cmd
-    mov     edx, CMD_STONE_XU
-sk_cmd:
+    mov     edx, dword ptr [rsp+28h]
     xor     r8d, r8d
     call    bc_ctor
     xor     esi, esi
@@ -1441,6 +1527,7 @@ sk_flush:
 sk_abort:
     mov     qword ptr [s_sent_item], 0
 sk_idle:
+    mov     byte ptr [s_active], 0      ; het nhom luyen duoc -> ket thuc dot luyen
     mov     rax, r15
     add     rax, S_IDLE_MS
     mov     qword ptr [s_wait_until], rax

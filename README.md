@@ -111,7 +111,7 @@ Dành cho **thành viên** trong nhóm (máy của mỗi thành viên đều c�
 > ⚠️ **Chưa kiểm chứng trong game:** trưởng nhóm được hiểu là **người đứng đầu danh sách nhóm**. Đó là thứ tự server gửi, và theo quy ước kiểu Ninja School thì người đầu tiên là trưởng nhóm. Thành viên chỉ đi theo được khi **cùng map** với trưởng nhóm, chưa tự tìm đường sang map khác.
 
 ### 7. 💎 Tự luyện đá tại chỗ khi hành trang đầy — `--stone`
-Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod tự luyện đá ngay tại chỗ, không cần tới NPC, để Auto nhặt tiếp được đồ.
+Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod bắt đầu một **đợt luyện** ngay tại chỗ, không cần tới NPC. Đá cấp thấp được nâng dần lên cho tới khi không còn nhóm nào luyện được, để Auto nhặt tiếp được đồ.
 
 **Cách game luyện đá** (popup "Luyện đá", lớp `ek`):
 - Mỗi loại đá (vật phẩm loại 26, id 0–11 = đá cấp 1–12) có một **điểm** do server gửi (`mc.nde`).
@@ -124,16 +124,27 @@ Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod t�
 |---|---|
 | Chọn đá | Tìm nhóm đá có tổng điểm **bằng đúng** điểm của một cấp cao hơn, nên **chỉ luyện khi chắc chắn 100%** và không mất đá. Ưu tiên cấp thấp nhất, ví dụ 4 viên cấp 1 thành 1 viên cấp 2. Tối đa 24 viên. |
 | Kiểm tra tiền | Đủ phí mới gửi lệnh. |
-| Gửi lệnh | Gửi packet giống nút "Luyện" của game, nhưng không mở hộp thoại. Mỗi lần chỉ luyện một nhóm, rồi chờ 3 giây cho server cập nhật hành trang. |
-| Không có cách luyện 100% hoặc không đủ tiền | Không làm gì, 30 giây sau xét lại. |
+| Gửi lệnh | Gửi packet giống nút "Luyện" của game, nhưng không mở hộp thoại. Mỗi lần luyện một nhóm, rồi chờ 3 giây cho server cập nhật hành trang. |
+| Luyện tiếp | Trong đợt luyện, mod luyện tiếp từng nhóm kể cả khi hành trang đã có chỗ trống, nên đá cấp thấp được **nâng dần**: 4 viên cấp 1 thành cấp 2, đủ 4 viên cấp 2 thì thành cấp 3, và cứ thế. |
+| Hết nhóm luyện được 100%, hoặc không đủ tiền | Kết thúc đợt. Đợt mới chỉ bắt đầu khi hành trang lại đầy. |
 | Server không xử lý | Gửi 2 lần mà hành trang không đổi (ví dụ server đòi phải đứng gần NPC) thì nghỉ 5 phút rồi mới thử lại, không spam. |
 
 - **Trả phí:** mặc định bằng **yên**: nếu thiếu yên thì server lấy thêm xu, và đá nhận được **bị khóa**, giống nút luyện bằng yên của game.
 - Dùng `--stone-pay xu` để trả bằng **xu**. Khi đó mod chỉ gộp đá cùng trạng thái khóa, nên đá không khóa luyện ra vẫn không khóa.
+- **Chọn cấp đá đích:** `--stone-levels A-B` luyện dần từ đá cấp A lên đá cấp B (1 ≤ A < B ≤ 12). Có viên đá cấp B nào là mod **cất vào rương đồ** (cmd 17, giống lệnh chuyển đồ vào rương của game) rồi luyện tiếp.
+  - Ví dụ `--stone-levels 6` (tức 1–6): nâng dần đá cấp 1 lên tới cấp 6, cất từng viên cấp 6 vào rương.
+  - `--stone-levels 3-6`: chỉ dùng đá từ cấp 3, nên đá cấp 1–2 được giữ nguyên.
+  - Đá cao hơn cấp B không bị đụng tới.
+  - `--stone-levels all`: luyện mọi cấp và không cất rương. Đây là mặc định.
+  - Mod chỉ cất được khi client đã có danh sách rương, tức bạn đã **mở rương đồ ít nhất một lần** từ lúc vào game, và rương còn chỗ trống. Nếu không, viên đá cấp B nằm lại trong hành trang và mod vẫn luyện tiếp bình thường.
+  - Gửi lệnh cất 2 lần mà không được (ví dụ server bắt đứng gần thủ kho) thì mod ngừng cất 30 phút. Việc luyện vẫn tiếp tục.
+- Các tuỳ chọn trả phí và cấp đá được lưu trong DLL. Chạy script lại với tính năng khác thì vẫn giữ nguyên, `--status` có hiển thị.
 - Không đụng tới đá đang được chọn trong popup Luyện đá. Khi popup đang mở thì mod không chạy.
 - Không chạy khi chết hoặc khi Auto tắt.
 
-> ⚠️ **Chưa kiểm chứng trong game:** client cho mở popup Luyện đá ở bất cứ đâu bằng vật phẩm id 729 trong hành trang. Popup đó gửi cùng packet mà mod gửi, nên chắc chắn chạy khi có vật phẩm này. Không có vật phẩm 729 thì server **có thể** bắt phải đứng gần NPC. Khi đó mod tự nghỉ như mô tả ở bảng trên.
+> ⚠️ **Chưa kiểm chứng trong game:**
+> - Client cho mở popup Luyện đá ở bất cứ đâu bằng vật phẩm id 729 trong hành trang. Popup đó gửi cùng packet mà mod gửi, nên chắc chắn chạy khi có vật phẩm này. Không có vật phẩm 729 thì server **có thể** bắt phải đứng gần NPC. Khi đó mod tự nghỉ như mô tả ở bảng trên.
+> - Cất đá vào rương từ xa: client gửi lệnh chuyển đồ vào rương mà không kèm điều kiện gì, nhưng server có thể chỉ cho chuyển khi đang mở rương ở NPC.
 
 ---
 
@@ -147,6 +158,7 @@ python patch_skill_delay.py --all             # bật cả 7 tính năng
 python patch_skill_delay.py --party           # chỉ thêm đánh theo nhóm (máy thành viên)
 python patch_skill_delay.py --stone           # thêm tự luyện đá (trả yên)
 python patch_skill_delay.py --stone-pay xu    # luyện đá trả bằng xu (đá không khóa vẫn không khóa)
+python patch_skill_delay.py --stone-levels 6   # nâng dần đá lên cấp 6, cất đá cấp 6 vào rương; all = mọi cấp
 python patch_skill_delay.py --mob --stage     # bật thêm tính năng (giữ các tính năng đang bật)
 python patch_skill_delay.py --remove quest    # tắt một tính năng
 python patch_skill_delay.py --accept-option 1 # đổi option nhận nhiệm vụ
@@ -177,7 +189,11 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 ```
 
 `verify_mod.py` kiểm tra các mục sau:
-- dựng lại đủ 128 tổ hợp tính năng (cả 2 kiểu trả phí luyện đá) và khôi phục được bản gốc;
+- dựng lại đủ 128 tổ hợp tính năng (cả 2 kiểu trả phí và giới hạn cấp đá) và khôi phục được bản gốc;
+- **chạy thật mã máy luyện đá** (`stone_tick`) trong DLL đã nạp:
+  - các hàm game được thay bằng callback Python;
+  - nhân vật, hành trang và bảng điểm đá là dữ liệu giả;
+  - kiểm tra packet gửi ra ở 24 tình huống: chọn đá, chờ/gửi lại/nghỉ, đủ hay thiếu phí, đá khóa khi trả xu, leo cấp tới cấp đích rồi cất rương, rương chưa nạp/đầy/bị từ chối, gộp nhiều cấp, giới hạn 24 viên;
 - gỡ được patch "0.3s" khỏi DLL cũ;
 - nâng cấp DLL v2 dựng bằng payload cũ (`--old-v2`) mà vẫn giữ tính năng;
 - nâng cấp được từ v1;

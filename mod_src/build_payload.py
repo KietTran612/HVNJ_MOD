@@ -364,7 +364,7 @@ def build(original_path, ml64):
 
     data_base = layout[data_idx[0]]
     cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party",
-                                         "cfg_die", "cfg_stone", "cfg_stone_xu")}
+                                         "cfg_die", "cfg_stone", "cfg_stone_xu", "cfg_stone_lo", "cfg_stone_hi")}
     return dict(
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),
