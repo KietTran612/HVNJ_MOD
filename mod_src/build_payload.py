@@ -104,6 +104,22 @@ GAME_SYMBOLS = {
     # dong "Mo ruong do" / "Mo nang cap trang bi" cua menu Mod
     "mo_ddt": 0x1992D0,             # static mo mo.ddt() - GameScr hien tai
     "mo_djd": 0x1E0730,             # mo.djd(int typeUI) - mo bang (4 = ruong do, 10 = nang cap)
+    # nut "Ruong" / "Nang cap" tren thanh Top (giong cach mo.dhp tao nut Shop)
+    "unity_component_gameobject": 0x65FD70,
+    "unity_gameobject_transform": 0x663210,
+    "unity_transform_find": 0x5F45E0,
+    "unity_object_set_name": 0x670470,
+    "ho_bzc": 0x7F0AC0,             # static ImageClickButton ho.bzc(GameObject, x, y, Sprite, i action)
+    "ho_cab": 0x7F3930,             # static hm ho.cab(Transform, string, x, y, font, color, colorEff, mode)
+    "ho_caf": 0x7F4740,             # static float ho.caf(Sprite) - chieu cao anh
+    "hm_bxl": 0x7E5120,             # hm.bxl(x, y) - dat vi tri chu
+    "mo_mk_ctor": 0x277DC0,         # mo.mk..ctor(mo, int id): th() -> mo.dhe(id)
+    "ka_TypeInfo": 0xE5B748,
+    "iv_TypeInfo": 0xE5B0F0,
+    "mo_mk_TypeInfo": 0xE3A438,
+    "hx_TypeInfo": 0xE5AC90,        # hx static +38h: he so doi toa do game -> UI (hk.bvx)
+    "unity_rt_set_anchored": 0x5E4B40,  # RectTransform.set_anchoredPosition(Vector2)
+    "dhe_back": 0x1C7875,           # mo.dhe: sau lenh dau "mov [rsp+18h], rbx"
     "__ImageBase": 0x0,
 }
 
@@ -471,6 +487,8 @@ def build(original_path, ml64, cl):
         # thanh Top: nut Shop (cua hang tong, ban duoc do) hien o moi map, khong can tick.
         # mo.dhn chi tra true o 13 map lang/truong/phan vien; chi mo.dhp (tao + an/hien nut Shop) goi no
         (SHOP_DHN, "4883EC28", "B001C3CC"),     # mov al, 1 ; ret
+        # mo.dhe (bam nut thanh Top): id nut cua mod -> mod_top_click
+        (0x1C7870, "48895C2418", jmp(0x1C7870, 5, S["dhe_hook"])),
     ]
     for rva, o, p in hooks:
         ob, pb = bytes.fromhex(o), bytes.fromhex(p)

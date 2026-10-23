@@ -53,6 +53,8 @@ EXTERN mod_cfg_load:PROC        ; doc lua chon tu PlayerPrefs (1 lan)
 EXTERN mod_action:PROC          ; int mod_action(int action) - xu ly lenh cua menu Mod
 EXTERN mod_menu_add_entry:PROC  ; void mod_menu_add_entry(List<iw>* list) - them dong "Mod HVNJ"
 EXTERN bag_tick:PROC            ; int bag_tick(long long now) - phien don hanh trang (hvnj_bag.c)
+EXTERN mod_top_buttons:PROC     ; void mod_top_buttons(mo, long long now) - tao nut Ruong / Nang cap
+EXTERN mod_top_click:PROC       ; void mod_top_click(mo, int id) - bam nut cua mod tren thanh Top
 
 ; ---- Con tro TypeInfo (Il2CppClass*), static fields o +0B8h -----------------
 EXTERN ca_TypeInfo:QWORD        ; ca.fxf (+16h) = trang thai nut Auto
@@ -85,12 +87,13 @@ EXTERN dek_keep_auto:PROC       ; mo.dek: dich cua "jne" (khong tat Auto)
 EXTERN dek_back:PROC            ; mo.dek: sau "mov rax, mo_TypeInfo"
 EXTERN bld_back:PROC            ; eq.bld: sau "je" chan tim duong trong map 161
 EXTERN bld_block:PROC           ; eq.bld: dich cua "je" (chan tim duong)
+EXTERN dhe_back:PROC            ; mo.dhe: sau "mov [rsp+18h], rbx" (lenh dau ham)
 EXTERN lm_TypeInfo:QWORD        ; lm
 
 PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end, dgl_filter, dgl_filter_end
 PUBLIC ctq_cd1, ctq_cd1_end, ctq_cd2, ctq_cd2_end, cdy_dlg, cdy_dlg_end, cdq_dlg, cdq_dlg_end
 PUBLIC dek_trial, dek_trial_end, bld_trial, bld_trial_end, dgj_core1, dgj_core1_end, dgj_core2, dgj_core2_end
-PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick, action_hook, menuchar_hook
+PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick, action_hook, menuchar_hook, dhe_hook
 PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone
 PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu, cfg_trial, cfg_sell, m_loaded
 PUBLIC q_engaged, r_pending, r_active, p_active, st_party_map, st_empty_since, s_active, s_wait_until, s_fails
@@ -135,6 +138,8 @@ CLASS_CCTOR_DONE EQU 0E0h       ; Il2CppClass: static constructor da chay
 
 MOD_ACT_BASE    EQU 48560000h   ; ma lenh cua menu Mod (game khong dung cac ma nay)
 MOD_ACT_COUNT   EQU 32
+TOP_BTN_BASE    EQU 48560100h   ; id nut cua mod tren thanh Top trong mo.dhe (hvnj_menu.c)
+TOP_BTN_COUNT   EQU 2
 
 STATUS_DEAD     EQU 14
 STATUS_DEADFLY  EQU 5
@@ -682,7 +687,11 @@ q_no_die:
     xor     edx, edx
     mov     ecx, 10000
     div     rcx
-    mov     rcx, rax                    ; bay gio (ms)
+    mov     r12, rax                    ; bay gio (ms)
+    mov     rcx, rbx
+    mov     rdx, r12
+    call    mod_top_buttons             ; nut Ruong / Nang cap duoi nut Shop (tao 1 lan)
+    mov     rcx, r12
     call    bag_tick                    ; ban trang bi -> luyen da -> cat ruong
     mov     r12d, eax                   ; r12d = 1: dang don hanh trang
     cmp     byte ptr [cfg_party], 0
@@ -1828,6 +1837,25 @@ ah_game:
     add     rsp, 28h
     jmp     mo_djh
 action_hook ENDP
+
+; -----------------------------------------------------------------------------
+; mo.dhe(int index) - xu ly bam nut tren thanh Top. Nhay toi tu lenh dau ham
+; (chua co prologue): rcx = mo, edx = id. Id nut cua mod (hvnj_menu.c tao bang
+; mo.mk(mo, id)) -> mod_top_click(mo, id) (tra ve thang cho noi goi mo.dhe);
+; id khac -> lenh goc "mov [rsp+18h], rbx" roi tiep tuc mo.dhe.
+; -----------------------------------------------------------------------------
+ALIGN 16
+dhe_hook PROC FRAME
+    .endprolog
+    mov     eax, edx
+    sub     eax, TOP_BTN_BASE
+    cmp     eax, TOP_BTN_COUNT
+    jb      dh_mod
+    mov     qword ptr [rsp+18h], rbx
+    jmp     dhe_back
+dh_mod:
+    jmp     mod_top_click
+dhe_hook ENDP
 
 ; -----------------------------------------------------------------------------
 ; mo.doMenuChar: thay cho "call ms.dkz" ngay truoc khi hien menu nhan vat.

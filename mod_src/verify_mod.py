@@ -60,6 +60,7 @@ T_SELL = CFG_TOGGLES.index("cfg_sell")
 ACT = 0x48560000                        # MOD_ACT_BASE
 ACT_PREVIEW = ACT + 14
 ACT_OPEN_BOX, ACT_OPEN_UP = ACT + 15, ACT + 16
+TOP_BTN = ACT + 0x100                   # id nút của mod trên thanh Top (mo.dhe)
 
 
 def check(cond, msg):
@@ -225,11 +226,12 @@ FRAME_FUNCS = {
     "stone_tick": (0x68, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbp", "Rbx"]),
     "action_hook": (0x28, []),
     "menuchar_hook": (0x28, []),
+    "dhe_hook": (0, []),
 }
 # Điểm quay lại / đích nhảy gốc trong hàm game mà cave nhảy tới (phải là đầu lệnh)
 BACK_TARGETS = ["dgj_accept", "dgj_skip", "dgj_epilogue_tail", "clo_store", "dgl_accept", "dgl_skip", "dgj_null",
                 "dgj_core1_back", "dgj_core2_back", "dgj_core2_skip", "ctq_cd1_back", "ctq_cd2_back", "cdy_back",
-                "cdq_back", "dek_keep_auto", "dek_back", "bld_back", "bld_block"]
+                "cdq_back", "dek_keep_auto", "dek_back", "bld_back", "bld_block", "dhe_back"]
 # Hook -> (lệnh, khối cave) ở đầu vùng thay
 HOOK_EXPECT = {
     0x1B9DB1: ("jmp", "dgj_core1"), 0x1B9DFC: ("jge", "dgj_ret"), 0x1B9E4B: ("jmp", "dgj_core2"),
@@ -237,6 +239,7 @@ HOOK_EXPECT = {
     0x19495E: ("call", "quest_tick"), 0x1927E2: ("jmp", "ctq_cd1"), 0x192912: ("jmp", "ctq_cd2"),
     0x3612E0: ("jmp", "cdy_dlg"), 0x360946: ("jmp", "cdq_dlg"), 0x19C061: ("jmp", "dek_trial"),
     0x477CBF: ("jmp", "bld_trial"), 0x4E6027: ("call", "action_hook"), 0x1EA0BA: ("call", "menuchar_hook"),
+    0x1C7870: ("jmp", "dhe_hook"),
 }
 ASM_FUNCS = set(FRAME_FUNCS)
 
@@ -531,6 +534,10 @@ class CaveSim:
         self.lists, self.iws, self.shown, self.prefs, self.djh = {}, {}, [], {}, []
         self.cih = {}                    # jr -> 1: có dòng khảm ngọc / trục luyện
         self.djd = []                    # (mo, loại bảng) đã mở bằng mo.djd
+        # UI giả cho nút trên thanh Top: Component -> GameObject -> Transform, tên, con
+        self.ui_go, self.ui_tr, self.ui_name, self.ui_children = {}, {}, {}, {}
+        self.buttons, self.labels, self.label_pos = [], [], []
+        self.anch = {}                   # RectTransform -> anchoredPosition (x, y) đặt lần cuối
         G = B.GAME_SYMBOLS
         self.cbs = {
             "lm_cua": F(U64, U64)(lambda _mi: self.char),
@@ -574,6 +581,20 @@ class CaveSim:
             # "Mở rương đồ" / "Mở nâng cấp trang bị"
             "mo_ddt": F(U64, U64)(lambda _mi: self.mo),
             "mo_djd": F(U64, U64, U64, U64)(lambda mo, ui, _mi: self.djd.append((mo, ui & 0xFFFFFFFF)) or 0),
+            # nút "Rương" / "Nâng cấp" trên thanh Top
+            "unity_component_gameobject": F(U64, U64, U64)(lambda c, _mi: self.ui_go.get(c, 0)),
+            "unity_gameobject_transform": F(U64, U64, U64)(lambda go, _mi: self.ui_tr.get(go, 0)),
+            "unity_transform_find": F(U64, U64, U64, U64)(self._find),
+            "unity_object_set_name": F(U64, U64, U64, U64)(
+                lambda o, n, _mi: self.ui_name.__setitem__(o, self.read_str(n)) or 0),
+            "ho_bzc": F(U64, U64, ctypes.c_float, ctypes.c_float, U64, U64, U64)(self._bzc),
+            "ho_cab": F(U64, U64, U64, ctypes.c_float, ctypes.c_float, U64, U64, U64, U64, U64)(self._cab),
+            "ho_caf": F(ctypes.c_float, U64, U64)(lambda _spr, _mi: 30.0),
+            "hm_bxl": F(U64, U64, ctypes.c_float, ctypes.c_float, U64)(
+                lambda lb, x, y, _mi: self.label_pos.append((lb, x, y)) or 0),
+            "mo_mk_ctor": F(U64, U64, U64, U64, U64)(self._mk_ctor),
+            "unity_rt_set_anchored": F(U64, U64, U64, U64)(
+                lambda rt, q, _mi: self.anch.__setitem__(rt, struct.unpack("<ff", struct.pack("<Q", q))) or 0),
         }
         self.cb_time = F(None, U64)(lambda p: setattr(U64.from_address(p), "value", self.now * 10000))
         for name_, cb in self.cbs.items():
@@ -583,7 +604,8 @@ class CaveSim:
                   struct.pack("<Q", ctypes.cast(self.cb_time, ctypes.c_void_p).value))
         # class giả: +133h cờ cctor, +0B8h static fields
         self.statics = {}
-        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo", "lm", "list_iw", "iw", "fp"):
+        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo", "lm", "list_iw", "iw", "fp",
+                  "ka", "iv", "mo_mk", "hx"):
             klass = self.alloc(0x140)
             st = self.alloc(0x200)
             self.w64(klass + 0xB8, st)
@@ -812,6 +834,56 @@ class CaveSim:
         r = self.bag_fn(self.now)
         return r, self.sends[n:]
 
+    # --- UI giả: nút Shop trên thanh Top và các nút con của nó
+    def ui_object(self, parent_go=0):
+        """Tạo Component + GameObject + Transform giả (con của parent_go); trả về component."""
+        comp, go, tr = self.alloc(0x20), self.alloc(0x20), self.alloc(0x20)
+        self.ui_go[comp], self.ui_tr[go] = go, tr
+        if parent_go:
+            self.ui_children.setdefault(self.ui_tr[parent_go], []).append(go)
+        return comp
+
+    def set_shop_button(self):
+        """mo.dhp đã tạo nút Shop (mo+378h = Image); ka static +380h = Sprite[] nền nút; iv +0Ch = màu chữ."""
+        self.shop_img = self.ui_object()
+        self.shop_go = self.ui_go[self.shop_img]
+        self.w64(self.mo + 0x378, self.shop_img)
+        self.sprite = self.alloc(0x20)
+        arr = self.alloc(0x28)
+        self.w64(arr + 0x18, 1)
+        self.w64(arr + 0x20, self.sprite)
+        self.w64(self.statics["ka"] + 0x380, arr)
+        self.w32(self.statics["iv"] + 0x0C, 0x00F0E0D0)
+        ctypes.c_float.from_address(self.statics["hx"] + 0x38).value = 2.0     # hệ số toạ độ UI
+        self.set_top_hk(0x508, 200.0, 10.0)                                   # hk nút Shop: x, y
+
+    def set_top_hk(self, field, x, y):
+        """hk của một nút thanh Top (mo + field) với toạ độ game đặt lần cuối (hk.bvx)."""
+        hk = self.alloc(0x20)
+        ctypes.c_float.from_address(hk + 0x18).value = x
+        ctypes.c_float.from_address(hk + 0x1C).value = y
+        self.w64(self.mo + field, hk)
+
+    def _find(self, tr, name, _mi):
+        n = self.read_str(name)
+        return next((self.ui_tr[g] for g in self.ui_children.get(tr, []) if self.ui_name.get(g) == n), 0)
+
+    def _bzc(self, parent, x, y, spr, act, _mi):
+        comp = self.ui_object(parent)
+        self.buttons.append(dict(parent=parent, x=x, y=y, spr=spr, act=act, go=self.ui_go[comp]))
+        return comp
+
+    def _cab(self, tr, text, x, y, font, color, eff, mode, _mi):
+        lb = self.alloc(0x20)
+        self.labels.append(dict(tr=tr, text=self.read_str(text), x=x, y=y, font=font & 0xFF,
+                                color=color & 0xFFFFFFFF, eff=eff & 0xFFFFFFFF, mode=mode & 0xFFFFFFFF, label=lb))
+        return lb
+
+    def _mk_ctor(self, this, mo, ident, _mi):
+        self.w64(this + 0x10, mo)
+        self.w32(this + 0x18, ident)
+        return 0
+
     # --- callback thay hàm game
     def _bl_bbb(self, writer, value, _mi):
         self.msgs[self.writers[writer]]["idx"].append(("int", value & 0xFFFFFFFF))
@@ -983,6 +1055,17 @@ def test_gates(orig, out):
         s.set_map(163)
         expect("dgj_filter", boss, False, {"cfg_mob": 1, "cfg_stage": 1}, "dgj_accept", None, "Thí Luyện: đánh hết")
         expect("dgj_filter", boss, False, {"cfg_mob": 1}, "dgj_skip", None, "Thí Luyện, tắt tự qua ải")
+        # mo.dhe (bấm nút thanh Top): id nút của mod -> mo.djd(4 / 10); id khác -> chạy tiếp mo.dhe
+        dhe = F(None, U64, U64)(s.sym("dhe_hook"))
+        for ident, want_back, want_djd in ((5, True, []), (TOP_BTN, False, [(s.mo, 4)]), (TOP_BTN + 1, False, [(s.mo, 10)]),
+                                           (TOP_BTN + 2, True, []), (TOP_BTN - 1, True, [])):
+            n += 1
+            s.djd.clear()
+            s.w32(s.marker, 0xFFFFFFFF)
+            dhe(s.mo, ident)
+            back = ctypes.c_uint32.from_address(s.marker).value == BACK_TARGETS.index("dhe_back")
+            check(back == want_back and s.djd == want_djd,
+                  f"mo.dhe({ident:#x}): về mo.dhe = {back}, mo.djd = {s.djd}")
     finally:
         s.close()
     print(f"    {n} tình huống")
@@ -1125,6 +1208,46 @@ def test_menu(orig, out):
         s.set_cfg(m_loaded=0, **{k: 0 for k in CFG_TOGGLES})
         s.qtick(1000)
         check(s.get_cfg("m_loaded") == 1 and state() == want, "quest_tick đọc PlayerPrefs")
+
+        # nút "Rương" / "Nâng cấp" trên thanh Top: chưa có nút Shop thì chưa tạo
+        s.qtick(1500)
+        check(not s.buttons, "chưa có nút Shop: chưa tạo nút")
+        s.set_shop_button()
+        s.qtick(1500)
+        b = s.buttons
+        ok = (len(b) == 2 and all(x["parent"] == s.shop_go and x["spr"] == s.sprite and x["x"] == 0 for x in b)
+              and [x["y"] for x in b] == [30.0, 30.0]
+              and [(ctypes.c_uint64.from_address(x["act"] + 0x10).value,
+                    ctypes.c_uint32.from_address(x["act"] + 0x18).value) for x in b] == [(s.mo, TOP_BTN), (s.mo, TOP_BTN + 1)]
+              and [s.ui_name.get(x["go"]) for x in b] == ["hvnj_ruong", "hvnj_nangcap"])
+        check(ok, f"tạo 2 nút con của nút Shop, bấm -> mo.dhe(id): {b}")
+        trs = [s.ui_tr[x["go"]] for x in b]
+        # hàng 2 trống: đặt đúng chỗ nút đầu hàng 2 của game (lệch nửa nút bên phải nút Shop), rồi sang trái
+        # (toạ độ so với nút Shop, đổi như hk.bvx: (x * 2, -y * 2))
+        check([s.anch.get(t) for t in trs] == [(30.0, -60.0), (-30.0, -60.0)],
+              f"hàng 2 trống: nút ở (Shop + 15, +30), (Shop - 15, +30): {[s.anch.get(t) for t in trs]}")
+        s.set_top_hk(0x540, 215.0, 40.0)
+        s.set_top_hk(0x530, 185.0, 40.0)
+        s.set_top_hk(0x518, 125.0, 40.0)
+        s.qtick(300)
+        check([s.anch.get(t) for t in trs] == [(-210.0, -60.0), (-270.0, -60.0)],
+              f"hàng 2 có nút: nối tiếp sau nút trái nhất (x 125 -> 95, 65): {[s.anch.get(t) for t in trs]}")
+        s.w64(s.mo + 0x518, 0)
+        s.qtick(300)
+        check([s.anch.get(t) for t in trs] == [(-90.0, -60.0), (-150.0, -60.0)],
+              f"nút hàng 2 bớt đi: dời theo ({[s.anch.get(t) for t in trs]})")
+        lb = s.labels
+        check([x["text"] for x in lb] == ["Rương", "Nâng cấp"]
+              and all((x["font"], x["color"], x["eff"], x["mode"]) == (0x26, 0x00F0E0D0, 0x221F1F, 1) for x in lb)
+              and [x["tr"] for x in lb] == [s.ui_tr[x["go"]] for x in b]
+              and [(x, y) for _l, x, y in s.label_pos] == [(0.0, 17.0), (0.0, 17.0)],
+              f"chữ trên nút giống nút Shop: {lb} {s.label_pos}")
+        for _ in range(4):
+            s.qtick(1500)
+        check(len(s.buttons) == 2, f"đã có nút thì không tạo lại ({len(s.buttons)})")
+        s.set_shop_button()                                         # nút Shop bị tạo lại (vd đổi cảnh)
+        s.qtick(1500)
+        check(len(s.buttons) == 4 and s.buttons[2]["parent"] == s.shop_go, "nút Shop mới: tạo lại nút cho nó")
     finally:
         s.close()
 

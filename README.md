@@ -37,6 +37,7 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 - **Không auto nào dùng xu.** Chỉ luyện đá là tốn phí, và chỉ trả bằng yên. Bán trang bị thì nhận về yên.
 - **Nút Shop trên thanh Top luôn hiện ở mọi map.** Sửa cố định, không có dòng tick (xem [Nút Shop](#-nút-shop-luôn-hiện-ở-mọi-map)).
+- **Nút "Rương" và "Nâng cấp" ở cuối hàng 2 thanh Top** mở rương đồ / nâng cấp trang bị ở bất kỳ map nào. Cũng là sửa cố định (xem [Nút Rương / Nâng cấp](#-nút-rương-và-nâng-cấp-trên-thanh-top)).
 - **Mặc định tắt hết.** Lựa chọn được lưu (Unity `PlayerPrefs`, khóa `HVNJ_MOD`) nên lần mở game sau vẫn giữ.
 - Tick / bỏ tick một tính năng đang chạy dở thì trạng thái dở dang của nó được xoá. Auto nhiệm vụ / tà thú bắt đầu khi bạn **bật Auto** sau khi đã tick.
 
@@ -263,6 +264,22 @@ Hai dòng **"Mở rương đồ"** và **"Mở nâng cấp trang bị"** trong m
 
 > ⚠️ **Chưa kiểm chứng trong game:** client không chặn mở các bảng này ở xa NPC, nhưng chưa biết server có trả danh sách rương, cho chuyển đồ ra / vào rương, hay cho nâng cấp (cmd 21) khi đứng xa NPC không.
 
+### 🔘 Nút "Rương" và "Nâng cấp" trên thanh Top
+Sửa cố định, **không có dòng tick**: cài mod là có. Bấm "Rương" mở rương đồ, bấm "Nâng cấp" mở bảng nâng cấp trang bị, ở bất kỳ map nào.
+
+**Vị trí, không đè và không bị che:** thanh Top (góc trên bên phải) được game xếp lại mỗi frame thành 2 hàng (`mo.dhp`):
+- hàng 1: nút Shop rồi sang trái, mỗi nút cách 30;
+- hàng 2: thấp hơn 30, bắt đầu lệch nửa nút bên phải nút Shop rồi sang trái, tối đa 5 nút.
+
+Mỗi 0,25 giây mod đọc vị trí thật các nút hàng 2 (`hk.bvx` lưu ở `hk+18h`) và đặt "Rương", "Nâng cấp" **nối tiếp ngay sau nút trái nhất của hàng 2**. Hàng 2 trống thì hai nút nằm đúng chỗ game đặt nút đầu hàng 2. Nút hàng 2 thêm / bớt thì hai nút dời theo, nên không đè lên nút nào của thanh Top.
+
+- Tạo đúng như game tạo nút Shop (`mo.dhp`): `ho.bzc` (nút ảnh, cùng ảnh nền với nút Shop) + `ho.cab` (chữ, cùng font / màu), hành động là `mo.mk(mo, id)` giống nút Shop.
+- Hai nút là **con của nút Shop**, nên đi theo vị trí (cả hiệu ứng thu / mở thanh Top) và ẩn / hiện cùng nút Shop.
+- Bấm nút thì game gọi `mo.dhe(id)` như mọi nút trên thanh Top; mod chặn ở lệnh đầu của `mo.dhe` các id riêng của mod (`0x48560100+`) rồi gọi `mo.djd(4)` / `mo.djd(10)` (giống dòng "Mở rương đồ" / "Mở nâng cấp trang bị" của menu Mod). Id khác chạy nguyên `mo.dhe` của game.
+- Mod kiểm tra mỗi 0,25 giây: nút Shop đã có mà chưa có nút của mod thì tạo; nút Shop được tạo lại thì tạo lại nút.
+
+> ⚠️ **Chưa kiểm chứng trong game:** vị trí được tính từ code xếp nút của game, chưa xem trên màn hình thật. Giao diện không thuộc thanh Top (nếu có ở cuối hàng 2) chưa được kiểm tra. Phần server chấp nhận thao tác ở xa NPC giống như mục trên.
+
 ### 🛒 Nút Shop luôn hiện ở mọi map
 Sửa cố định, **không có dòng tick**: cài mod là có.
 
@@ -333,6 +350,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 - cấu trúc PE;
 - disassemble mọi lệnh nhảy/gọi của cave asm và hàm C; không lệnh nào của game nhảy vào giữa vùng đã thay;
 - nút Shop: `mo.dhn` luôn trả về "có", và cả DLL chỉ có 2 chỗ gọi `mo.dhn`, đều là phần nút Shop của thanh Top;
+- nút "Rương" / "Nâng cấp": chạy thật hook `mo.dhe` (id của mod mở đúng bảng, id khác về lại `mo.dhe`) và việc tạo nút (con của nút Shop, đúng ảnh / chữ, không tạo trùng, tạo lại khi nút Shop mới), vị trí nối tiếp cuối hàng 2 khi hàng 2 trống / có nút / bớt nút;
 - nạp DLL thật bằng `LoadLibraryEx` để kiểm tra quyền trang nhớ và `RtlLookupFunctionEntry`;
 - `RtlVirtualUnwind` từ trong cave cho kết quả giống hệt khi unwind tại vị trí hook gốc;
 - chạy thử CLI.
@@ -350,6 +368,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x4E6027` | `iw.cgd` | lệnh của menu Mod (`0x48560000+`) -> `mod_action`, còn lại -> `mo.djh` |
 | `0x1EA0BA` | `mo.doMenuChar` | thêm dòng "Mod HVNJ" vào menu nhân vật |
 | `0x1CC170` | `mo.dhn` | `mov al, 1 ; ret`: nút Shop trên thanh Top hiện ở mọi map (sửa cố định) |
+| `0x1C7870` | `mo.dhe` | bấm nút thanh Top: id nút của mod -> mở rương / nâng cấp, id khác chạy nguyên hàm game |
 
 ---
 

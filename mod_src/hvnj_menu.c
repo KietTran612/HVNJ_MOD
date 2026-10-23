@@ -36,6 +36,23 @@ extern void ms_dla(void* ms, void* list, int pos, int isNpc, int isTask, int isT
 extern Il2CppString* prefs_get_string(Il2CppString* key, void* method);
 extern void* mo_ddt(void* method);                                   /* GameScr (mo) hien tai */
 extern void mo_djd(void* mo, int typeUI, void* method);              /* mo bang theo loai     */
+
+/* nut tren thanh Top (duoi nut Shop) - cung cach game tao nut Shop trong mo.dhp */
+extern void* unity_component_gameobject(void* comp, void* method);  /* Component.gameObject  */
+extern void* unity_gameobject_transform(void* go, void* method);    /* GameObject.transform  */
+extern void* unity_transform_find(void* tr, Il2CppString* name, void* method);
+extern void unity_object_set_name(void* obj, Il2CppString* name, void* method);
+extern void* ho_bzc(void* parent_go, float x, float y, void* sprite, void* action, void* method); /* nut anh */
+extern void* ho_cab(void* parent_tr, Il2CppString* text, float x, float y, int font, int color,
+                    int color_eff, int mode, void* method);          /* chu tren nut          */
+extern float ho_caf(void* sprite, void* method);                     /* chieu cao anh (don vi game) */
+extern void hm_bxl(void* label, float x, float y, void* method);     /* dat vi tri chu        */
+extern void mo_mk_ctor(void* self, void* mo, int id, void* method);  /* hanh dong nut: mo.dhe(id) */
+extern void* ka_TypeInfo;      /* ka static +380h: Sprite[] nen nut, [0] = nen nut Shop     */
+extern void* iv_TypeInfo;      /* iv static +0Ch: mau chu cua nut thanh Top                 */
+extern void* mo_mk_TypeInfo;   /* mo.mk: hanh dong cua nut thanh Top (th() -> mo.dhe(id))   */
+extern void* hx_TypeInfo;      /* hx static +38h: he so doi toa do game -> UI               */
+extern void unity_rt_set_anchored(void* rt, unsigned long long pos, void* method);  /* RectTransform.anchoredPosition = Vector2 */
 extern void prefs_set_string(Il2CppString* key, Il2CppString* value, void* method);
 
 /* o metadata (TypeInfo / MethodInfo) cua game */
@@ -71,6 +88,22 @@ extern int bag_describe(int k, wchar* buf, int max, int* st);    /* st: 1 ban, 3
 #define ACT_MAX      16
 #define UI_BOX       4            /* mo.djd: ruong do (fp che do ruong; chua co lm.miw thi xin server) */
 #define UI_UPGRADE   10           /* mo.djd: nang cap trang bi (gw) */
+
+#define AT(p, off, T) (*(T*)((char*)(p) + (off)))
+#define STATICS       0xB8        /* Il2CppClass::static_fields */
+#define MO_SHOP_IMAGE 0x378       /* mo.nnq: Image cua nut Shop (null khi chua tao nut) */
+#define KA_SPRITES    0x380
+#define IV_COLOR      0x0C
+#define TOP_FONT      0x26        /* font / mau vien chu giong nut Shop */
+#define TOP_COLOR_EFF 0x221F1F
+#define TOP_BTN_BASE  0x48560100  /* id nut cua mod trong mo.dhe - phai trung voi hvnj_caves.asm */
+#define N_TOP_BTN     2
+#define TOP_CHECK_MS  250
+#define MO_SHOP_HK    0x508       /* mo: hk cua nut Shop */
+#define HK_X          0x18        /* hk: x game dat lan cuoi (hk.bvx), y o +1Ch */
+#define HX_SCALE      0x38        /* hx static +38h: he so doi toa do game -> UI (hk.bvx) */
+#define TOP_STEP      30.0f       /* khoang cach 2 nut / 2 hang tren thanh Top (mo.dhp) */
+#define TOP_ROW       30.0f       /* hang 2 thap hon hang nut Shop 30 */
 #define N_TOGGLE     9
 #define T_SELL       7            /* vi tri dong "Tu ban trang bi" */
 #define T_STONE      8
@@ -301,6 +334,122 @@ static void show_preview(void)
     add_item(list, b, n, ACT_CLOSE);
     menu = ms_dkz(0);
     if (menu) ms_dla(menu, list, 0, 0, 0, 0, 0);
+}
+
+/* ---- nut "Ruong" / "Nang cap" tren thanh Top --------------------------------
+ * Thanh Top (goc tren ben phai) xep nut thanh 2 hang (mo.dhp, moi frame):
+ *   hang 1: nut Shop roi sang trai, moi nut cach 30 (mo +508h, 550h, 510h, 570h, 558h, 528h);
+ *   hang 2: thap hon 30, bat dau lech nua nut ben phai nut Shop roi sang trai
+ *           (mo +540h, 530h, 520h, 518h, 538h).
+ * Moi nut co hk (RectTransform + x,y game dat lan cuoi o +18h / +1Ch). Nut cua mod la
+ * con cua nut Shop (di theo va an / hien cung nut Shop khi thanh Top thu gon), dat
+ * NOI TIEP CUOI HANG 2 de khong de / bi de boi nut nao cua game. Bam nut -> mo.mk.th()
+ * -> mo.dhe(TOP_BTN_BASE + k) -> dhe_hook (asm) -> mod_top_click. */
+static const wchar* top_btn_name(int k)
+{
+    return k == 0 ? L"hvnj_ruong" : L"hvnj_nangcap";
+}
+
+static const wchar* top_btn_text(int k)
+{
+    return k == 0 ? L"Rương" : L"Nâng cấp";
+}
+
+/* hk cua cac nut hang 2 trong mo (game xep tu phai sang trai) */
+static int row2_field(int i)
+{
+    if (i == 0) return 0x540;
+    if (i == 1) return 0x530;
+    if (i == 2) return 0x520;
+    if (i == 3) return 0x518;
+    return 0x538;
+}
+
+static long long tb_next;
+
+static void create_top_buttons(void* mo, void* go)
+{
+    void* st;
+    void* sprites;
+    void* spr;
+    float h;
+    int k, color;
+    il2cpp_init_md(&ka_TypeInfo);
+    il2cpp_init_md(&iv_TypeInfo);
+    il2cpp_init_md(&mo_mk_TypeInfo);
+    if (!ka_TypeInfo || !iv_TypeInfo || !mo_mk_TypeInfo) return;
+    st = AT(ka_TypeInfo, STATICS, void*);
+    sprites = st ? AT(st, KA_SPRITES, void*) : 0;
+    if (!sprites || AT(sprites, 0x18, long long) < 1) return;
+    spr = AT(sprites, 0x20, void*);
+    if (!spr) return;
+    st = AT(iv_TypeInfo, STATICS, void*);
+    color = st ? AT(st, IV_COLOR, int) : 0;
+    h = ho_caf(spr, 0);
+    for (k = 0; k < N_TOP_BTN; k++) {
+        void* act = il2cpp_object_new(mo_mk_TypeInfo);
+        void* btn;
+        void* bgo;
+        void* btr;
+        void* label;
+        if (!act) return;
+        mo_mk_ctor(act, mo, TOP_BTN_BASE + k, 0);
+        btn = ho_bzc(go, 0.0f, TOP_ROW, spr, act, 0);                /* vi tri dat lai ngay sau */
+        bgo = btn ? unity_component_gameobject(btn, 0) : 0;
+        if (!bgo) return;
+        unity_object_set_name(bgo, str(top_btn_name(k)), 0);
+        btr = unity_gameobject_transform(bgo, 0);
+        if (!btr) return;
+        label = ho_cab(btr, str(top_btn_text(k)), 0.0f, 0.0f, TOP_FONT, color, TOP_COLOR_EFF, 1, 0);
+        if (label) hm_bxl(label, 0.0f, h * 0.5f + 2.0f, 0);         /* giong chu cua nut Shop */
+    }
+}
+
+/* quest_tick goi moi frame (now = ms): tao nut neu nut Shop da co ma chua co nut cua mod,
+ * roi dat nut noi tiep cuoi hang 2 (toa do so voi nut Shop). */
+void mod_top_buttons(void* mo, long long now)
+{
+    void* shop;
+    void* go;
+    void* tr;
+    void* st;
+    float xs, x0, scale;
+    int i, found = 0, k;
+    if (now < tb_next || !mo) return;
+    tb_next = now + TOP_CHECK_MS;
+    shop = AT(mo, MO_SHOP_HK, void*);
+    if (!AT(mo, MO_SHOP_IMAGE, void*) || !shop) return;               /* chua co nut Shop */
+    go = unity_component_gameobject(AT(mo, MO_SHOP_IMAGE, void*), 0);
+    tr = go ? unity_gameobject_transform(go, 0) : 0;
+    if (!tr) return;
+    if (!unity_transform_find(tr, str(top_btn_name(0)), 0)) create_top_buttons(mo, go);
+    /* x cua o trong dau tien o cuoi hang 2 */
+    xs = AT(shop, HK_X, float);
+    x0 = 0.0f;
+    for (i = 0; i < 5; i++) {
+        void* hk = AT(mo, row2_field(i), void*);
+        if (!hk) continue;
+        if (!found || AT(hk, HK_X, float) < x0) x0 = AT(hk, HK_X, float);
+        found = 1;
+    }
+    x0 = found ? x0 - TOP_STEP : xs + TOP_STEP * 0.5f;           /* hang 2 trong: cho nut dau cua hang 2 */
+    il2cpp_init_md(&hx_TypeInfo);
+    st = hx_TypeInfo ? AT(hx_TypeInfo, STATICS, void*) : 0;
+    scale = st ? AT(st, HX_SCALE, float) : 1.0f;
+    for (k = 0; k < N_TOP_BTN; k++) {
+        void* btr = unity_transform_find(tr, str(top_btn_name(k)), 0);
+        union { float f[2]; unsigned long long q; } pos;
+        if (!btr) continue;
+        pos.f[0] = (x0 - TOP_STEP * (float)k - xs) * scale;         /* nhu hk.bvx: (x * s, -y * s) */
+        pos.f[1] = -TOP_ROW * scale;
+        unity_rt_set_anchored(btr, pos.q, 0);
+    }
+}
+
+/* Bam nut cua mod (dhe_hook nhay toi tu dau mo.dhe: rcx = mo, edx = id). */
+void mod_top_click(void* mo, int id)
+{
+    if (mo) mo_djd(mo, id == TOP_BTN_BASE ? UI_BOX : UI_UPGRADE, 0);
 }
 
 /* Them dong "Mod HVNJ" vao menu nhan vat (list do mo.doMenuChar vua dung). */
