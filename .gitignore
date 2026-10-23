@@ -17,3 +17,7 @@ UnityCrashHandler64.exe
 # Intermediate decompilation metadata
 decompiled_output/cpp2il_out/
 decompiled_output/il2cpp_dump/DummyDll/
+
+# File tam / sao luu loi cua patch_skill_delay.py
+*.tmp
+*.khong-phai-ban-goc

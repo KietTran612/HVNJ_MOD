@@ -1,99 +1,158 @@
-# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện (6 Tính Năng Cao Cấp)
+# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (6 Tính Năng)
 
 [![Game Version](https://img.shields.io/badge/HVNJ-186-orange.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![Unity](https://img.shields.io/badge/Unity-2020.2.7_x64_IL2CPP-blue.svg)](https://unity.com/)
-[![Status](https://img.shields.io/badge/Status-Fully_Patched-brightgreen.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Bản mod toàn diện dành cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** nền tảng PC x64 Unity IL2CPP, can thiệp trực tiếp vào binary machine code `GameAssembly.dll` để tối ưu hóa trải nghiệm chơi, tốc độ ra chiêu và tự động hóa chu trình luyện tập & làm nhiệm vụ.
+Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 Unity IL2CPP. Mod sửa trực tiếp mã máy trong `GameAssembly.dll`.
+
+> **v2 thay cho v1.** Bản v1 có lỗi làm game crash (cave nhiệm vụ ghi vào vùng code chỉ đọc và đè lên code `ClassAndroid`) và nhiều lỗi logic. Xem mục [Thay đổi so với v1](#-thay-đổi-so-với-v1). Script v2 tự nhận ra DLL đã cài v1 và nâng cấp được.
 
 ---
 
-## 🚀 Danh Sách 6 Tính Năng Mod Đỉnh Cao
+## 🚀 6 Tính Năng
 
-### 1. ⚡ Tốc Độ Ra Chiêu Siêu Tốc (0.3s Cooldown)
-- **Cơ chế:** Gỡ bỏ hoàn toàn thời gian khựng động tác (animation-lock) và giảm hồi chiêu toàn cục xuống còn **0.3 giây**.
-- **Hiệu quả:** Ra chiêu liên hoàn, dồn sát thương cực nhanh cho tất cả các hệ phái.
+### 1. ⚡ Tốc độ ra chiêu 0.3s — `--skill`
+`lm.cwj()` (thời gian hồi chiêu) luôn trả về 0.3 giây, áp dụng cho mọi kỹ năng của mọi hệ phái.
 
-### 2. 🛡️ Tự Động Né Quái Tinh Anh, Thủ Lĩnh & Boss
-- **Cơ chế:** Tự động lọc danh sách mục tiêu quái:
-  - Bỏ qua quái Tinh Anh (`levelBoss == 1`).
-  - Bỏ qua quái Thủ Lĩnh (`levelBoss == 2`).
-  - Bỏ qua Boss thế giới / Boss map (`isBos == true`).
-- **Hiệu quả:** Nhân vật chỉ chọn quái thường gần nhất để đánh, tránh bị sốc sát thương khi treo máy train quái.
+### 2. 🛡️ Né quái Tinh Anh / Thủ Lĩnh / Boss khi Auto — `--mob`
+- Auto thường (`mo.dgj`) chọn **quái thường gần nhất**. Quái Tinh Anh (`levelBoss == 1`), Thủ Lĩnh (`levelBoss == 2`) và Boss (`isBos`) bị bỏ qua.
+- Auto nhiệm vụ (`mo.dgl`) cũng bỏ qua các loại quái trên.
 
-### 3. ⏱️ Chết Tự Động Quay Về Liền (0s Instant Return)
-- **Cơ chế:** Giảm thời gian đếm ngược 15 giây (500 frames) khi nhân vật chết xuống **0 giây**.
-- **Hiệu quả:** Nhân vật hồi sinh / quay về ngay lập tức, tự động tiếp tục lộ trình quay lại bãi train mà không bị gián đoạn.
+### 3. ⏱️ Chết quay về ngay — `--die`
+Bỏ đếm ngược khi chết: 15 nhịp còn 1 nhịp, hộp thoại 500 frame còn 2 frame.
 
-### 4. 🏰 Auto & Tự Quay Lại Map Trong Khu Thí Luyện (Map 161)
-- **Cơ chế:** 
-  - Gỡ bỏ lệnh tự động tắt Auto của game khi bước vào Khu Thí Luyện.
-  - Gỡ bỏ blacklist kiểm tra bản đồ cấm di chuyển.
-- **Hiệu quả:** Giữ nguyên trạng thái Auto trong Thí Luyện; khi chết hồi sinh ở cửa map, Auto tự động chạy ngược lại bãi quái để đánh tiếp.
+### 4. 🏰 Giữ Auto trong Thí Luyện — `--trial`
+Game không còn tự tắt Auto khi vào map 161 và không còn chặn tìm đường trong map 161. Khi chết và hồi sinh ở cửa, Auto tự chạy lại bãi quái.
 
-### 5. 🎯 Tự Động Chuyển Ải Thí Luyện (Ải 161 ➔ 167) & Dừng Ở Map Cuối
-- **Cơ chế:** Code Cave thông minh kiểm tra trạng thái quái trong Thí Luyện:
-  - Khi tiêu diệt hết quái ở ải hiện tại (161 ➔ 166), nhân vật tự động tìm cổng dịch chuyển và bước qua ải kế tiếp.
-  - Nhận diện thông minh: Cho phép đánh Boss / Thủ Lĩnh trong Thí Luyện để dọn sạch ải.
-  - Khi tới ải cuối cùng (Map 167) và tiêu diệt xong quái/Boss, Auto tự động tắt và dừng lại an toàn.
+### 5. 🎯 Tự qua ải Thí Luyện 161 → 167 — `--stage`
+- Trong Thí Luyện, Auto đánh **mọi** quái, kể cả Boss và Thủ Lĩnh, để dọn sạch ải.
+- Nếu không tìm thấy quái nào **liên tục 2.5 giây**:
+  - ở ải 161–166: nhân vật chạy tới cổng sang ải kế tiếp;
+  - ở ải 167: Auto tự tắt.
+- Tính năng này tự kèm phần sửa chọn quái của `mo.dgj` (dùng chung với `--mob`), nên bật riêng `--stage` vẫn chạy được.
 
-### 6. 📜 Full Auto Làm Nhiệm Vụ Hàng Ngày Siêu Tốc (Dịch Chuyển Tức Thời)
-- **Cơ chế khép kín 100% tự động:**
-  - **Tới nhanh map nhiệm vụ ("Đi làm nhiệm vụ"):** Ngay sau khi nhận nhiệm vụ tại NPC 25 (Thầy/Cô hiệu trưởng), Auto kích hoạt tính năng *"Đi làm nhiệm vụ"* (`Service.cmy().menu(25, 0, 1)`) để **dịch chuyển tức thời đến thẳng map có quái**, không tốn thời gian chạy bộ qua từng map!
-  - **Auto đánh quái:** Tự động tìm và diệt đúng loại quái nhiệm vụ (vẫn né quái tinh anh/thủ lĩnh).
-  - **Dịch chuyển về trường tức thời bằng Thông Thành Phù:** Đánh đủ số lượng quái, nhân vật lập tức sử dụng **Thông Thành Phù** (`Service.cmy().cqj(schoolMap)`) bay về trường chỉ trong 1 tick.
-  - **Tự mua Thông Thành Phù bằng Yên:** Nếu kiểm tra trong túi đồ hết Thông Thành Phù, Auto tự động mua 10 Thông Thành Phù từ Tạp Hóa bằng Yên khi ở trường.
-  - **Trả & nhận tiếp:** Gặp NPC 25 chọn *"Hoàn thành nhiệm vụ"* (`menu(25, 0, 2)`), nhận thưởng và lặp lại liên tục cho đến khi hết lượt nhiệm vụ ngày!
-- **Tách biệt thông minh:** Tạm dừng Auto nhiệm vụ ngày khi đang ở Thí Luyện (161–167) để ưu tiên vượt ải.
+### 6. 📜 Auto nhiệm vụ hàng ngày — `--quest`
+Mod không tự viết logic đi lại hay đánh quái mà gọi lại chức năng **"Bấm vào đây để tự động làm nhiệm vụ"** có sẵn trong game (`mo.dga` → `mo.dgh`).
+
+**Bắt đầu:** bật **Auto** ở một map ngoài Thí Luyện. Từ lúc đó mod chạy vòng lặp sau (cứ 0.5 giây kiểm tra một lần):
+
+| Tình huống | Mod làm gì |
+|---|---|
+| Chưa có nhiệm vụ hàng ngày | Tìm đường về trường theo hệ phái (map 1 / 72 / 27 / 160), đi tới NPC 25, gửi `menu(25, 0, N)` để **nhận** nhiệm vụ. N mặc định là 0, đổi bằng `--accept-option`. |
+| Có nhiệm vụ, chưa ở map nhiệm vụ | Gọi auto nhiệm vụ của game. Nếu đang đứng cạnh NPC 25, game tự chọn option 3 để **dịch chuyển thẳng tới map nhiệm vụ**; nếu không thì tìm đường tới đó. |
+| Đang ở map nhiệm vụ | Game tự bật Auto và đánh đúng loại quái. Nếu bật `--mob`, Tinh Anh/Thủ Lĩnh vẫn bị né. |
+| Đánh đủ số lượng | Game tự về trường gặp NPC 25 và chọn option 2 để **trả** nhiệm vụ. Mod tiếp tục nhận nhiệm vụ mới. |
+| Vào Thí Luyện (161–167) | Tạm dừng, nhường cho `--stage`. |
+
+**Dừng:**
+- **Tắt Auto** lúc đang đánh ở map nhiệm vụ.
+- Nhận nhiệm vụ 4 lần không được: hết lượt trong ngày, hoặc sai option.
+- Gọi auto nhiệm vụ 3 lần liên tiếp mà không có tiến triển.
+- Tìm đường về trường 6 lần (khoảng 60 giây) mà không tới được.
+- Nhân vật chưa vào lớp.
+
+Muốn chạy lại thì bật Auto lần nữa.
+
+> ⚠️ **Phần chưa kiểm chứng trong game:** menu của NPC do server gửi xuống. Option 2 (trả) và 3 (đi tới) là những option chính code game dùng. Option **nhận** nhiệm vụ = 0 là **suy luận** theo thứ tự menu kiểu Ninja School (Nhận / Hủy / Hoàn thành / Đi tới). Nếu nhận không được, thử `--accept-option 1`, `2`…
+
+> Bản v1 có "Thông Thành Phù" và "tự mua phù bằng Yên". Hai chức năng này **đã bị bỏ**: lệnh v1 gọi (`lj.cqj`) thực chất là lệnh xin lại dữ liệu map, không phải lệnh dùng phù, còn lệnh mua dùng chỉ số cửa hàng chưa được kiểm chứng. Thay vào đó, v2 dùng dịch chuyển qua NPC (option 3) của chính game.
 
 ---
 
-## 🛠️ Hướng Dẫn Sử Dụng
+## 🛠️ Cách dùng
 
-### Cách 1: Sử Dụng Trực Tiếp File Đã Patch Sẵn
-Chỉ cần tải file `GameAssembly.dll` trong repository này và chép đè vào thư mục game **Học Viện Ninja**, sau đó mở `Hoc Vien Ninja.exe` và bật Auto trong game.
-
-### Cách 2: Sử Dụng Script Patch `patch_skill_delay.py`
-Yêu cầu Python 3.8+ trên Windows:
+Cần Python 3.8+ (chỉ dùng thư viện chuẩn). Chạy trong thư mục game và **tắt game trước khi chạy**:
 
 ```bash
-# Xem trạng thái hiện tại của file game
-python patch_skill_delay.py --status
-
-# Bật đầy đủ cả 6 tính năng mod cao cấp
-python patch_skill_delay.py --all
-
-# Bật riêng lẻ từng tính năng tùy nhu cầu:
-python patch_skill_delay.py --quest   # Auto Nhiệm vụ Hàng ngày (Dịch chuyển siêu tốc)
-python patch_skill_delay.py --stage   # Tự chuyển ải Thí Luyện (161->167)
-python patch_skill_delay.py --trial   # Auto trong map Thí Luyện
-python patch_skill_delay.py --die     # Hồi sinh / quay về liền khi chết
-python patch_skill_delay.py --mob     # Né quái tinh anh / thủ lĩnh / boss
-python patch_skill_delay.py --skill   # Tốc độ ra chiêu 0.3s
-
-# Khôi phục về file gốc ban đầu (từ GameAssembly.dll.bak)
-python patch_skill_delay.py --restore
+python patch_skill_delay.py --status          # xem trạng thái
+python patch_skill_delay.py --all             # bật cả 6 tính năng
+python patch_skill_delay.py --mob --stage     # bật thêm tính năng (giữ các tính năng đang bật)
+python patch_skill_delay.py --remove quest    # tắt một tính năng
+python patch_skill_delay.py --accept-option 1 # đổi option nhận nhiệm vụ
+python patch_skill_delay.py --restore         # trả về bản gốc
 ```
+
+- Mỗi lần chạy, script **dựng lại DLL từ bản gốc** (đã kiểm tra SHA-256) rồi áp đúng tập tính năng, nên thứ tự chạy không gây xung đột.
+- Bản gốc được giữ ở `GameAssembly.dll.bak`. Nếu file này mất hoặc không phải bản gốc, script tự khôi phục bản gốc từ DLL đã mod (kể cả bản v1).
+- Nếu game cập nhật lên phiên bản khác (SHA-256 không khớp), script từ chối patch để tránh làm hỏng DLL.
+
+Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 6 tính năng) vào thư mục game.
 
 ---
 
-## 📂 Cấu Trúc Repository
+## 🔧 Kỹ thuật
 
+- Code cave nằm trong 2 section mới ở cuối DLL:
+  - `.hvnj` (RX): code;
+  - `.hvnjd` (RW): cấu hình + trạng thái.
+- Không ghi vào code của game và chỉ dùng địa chỉ RIP-relative, nên an toàn với ASLR.
+- Mỗi cave đều có unwind info đăng ký trong `.pdata`. Cave chạy bên trong frame của hàm game dùng unwind dạng *chained* tới hàm đó. Nhờ vậy exception của game đi qua cave vẫn được xử lý bình thường thay vì làm game thoát.
+- Mã nguồn: `mod_src/hvnj_caves.asm`, assemble bằng `ml64` (Visual Studio).
+
+```bash
+python mod_src/build_payload.py   # assemble + sinh bảng patch vào patch_skill_delay.py
+python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở game
 ```
-├── GameAssembly.dll        # File binary đã patch sẵn đầy đủ 6 tính năng
-├── patch_skill_delay.py    # Tool Python tự động patch / khôi phục game
-├── README.md               # Tài liệu hướng dẫn chi tiết
-├── decompiled_output/      # Scripts phân tích reverse engineering & assembler code cave
-└── ...
-```
+
+`verify_mod.py` kiểm tra các mục sau:
+- dựng lại đủ 64 tổ hợp tính năng và khôi phục được bản gốc;
+- nâng cấp được từ v1;
+- cấu trúc PE;
+- disassemble mọi lệnh nhảy/gọi;
+- nạp DLL thật bằng `LoadLibraryEx` để kiểm tra quyền trang nhớ và `RtlLookupFunctionEntry`;
+- `RtlVirtualUnwind` từ trong cave cho kết quả giống hệt khi unwind tại vị trí hook gốc;
+- chạy thử CLI.
+
+| Hook (RVA) | Hàm game | Mục đích |
+|---|---|---|
+| `0x259320` | `lm.cwj` | trả về 0.3f |
+| `0x1B9DB1`, `0x1B9E4B` | `mo.dgj` | bỏ ràng buộc quái theo nhiệm vụ chính |
+| `0x1B9DFC` | `mo.dgj` | trả về quái gần nhất thay vì `null` |
+| `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
+| `0x1BA485` | `mo.dgl` | lọc quái của auto nhiệm vụ |
+| `0x24B5AC` | `lm.clo` | tự qua ải Thí Luyện |
+| `0x19495E` | `mo.ctq` | vòng lặp nhiệm vụ hàng ngày (sau `mo.dgd`) |
+| `0x1927E2`, `0x192912`, `0x3612E0`, `0x360946` | `mo.ctq`, `hw.cdy`, `hw.cdq` | bỏ đếm ngược khi chết |
+| `0x19C061`, `0x477CBF` | `mo.dek`, `eq.bld` | Auto và tìm đường trong map 161 |
 
 ---
 
-## ⚠️ Lưu Ý & Miễn Trừ Trách Nhiệm
-- Bản mod được phát triển cho mục đích học tập, nghiên cứu kỹ thuật Reverse Engineering và IL2CPP binary patching trên nền tảng Unity x64.
-- Người dùng tự chịu trách nhiệm khi sử dụng bản mod trong game.
+## 🩹 Thay đổi so với v1
+
+**Lỗi gây crash:**
+- Cave nhiệm vụ của v1 ghi biến đếm vào section `il2cpp` (chỉ đọc). Vì vậy game crash ngay khi bật Auto.
+- Ô nhớ biến đếm đó còn nằm đè lên một lệnh `je`, và ba lệnh `inc`/`cmp`/`mov` trỏ lệch nhau 1 byte.
+- Cave đè lên 928 byte code thật của `ClassAndroid` (`loginSuccess`, `logoutSuccess`…).
+- Các cave không có unwind info, nên exception đi qua cave làm game thoát.
+
+**Lỗi chọn quái:**
+- NOP lệnh `xor eax,eax` làm `mo.dgj` trả về con trỏ rác khi nhân vật không có nhiệm vụ chính.
+
+**Lỗi logic nhiệm vụ:**
+- Cave đọc nhầm field của nhiệm vụ: so `taskId` với `count` thay vì `count` với `maxCount`.
+- Cave dùng `mo.noz` làm cờ Auto, trong khi đó là cờ ẩn/hiện HUD. Cờ Auto thật là `ca.fxf`.
+- "Đi làm nhiệm vụ" gửi option 1. Theo thứ tự menu đã suy luận ở trên, option 1 nhiều khả năng là Hủy, còn option dịch chuyển mà code game dùng là 3.
+- `mo.dga` được gọi với index sai (0 thay vì vị trí + 2), nên game không tự trả nhiệm vụ khi đủ số lượng.
+- Hệ phái 7/8 (trường map 160) bị bỏ sót.
+- Spam lệnh mua phù và dịch chuyển mỗi 1.2 giây.
+
+**Lỗi tính năng Thí Luyện:**
+- Chỉ cần 1 tick không thấy quái là đã chạy ra cổng hoặc tắt Auto ở ải 167.
+- Cờ "đã chết" kiểm tra sai field.
+
+**Lỗi script:**
+- Không kiểm tra byte gốc trước khi ghi.
+- `.bak` có thể là bản đã patch.
+- `--mob` và `--stage` ghi đè lẫn nhau.
+- `--stage` không chạy được khi bật riêng.
 
 ---
-**Tác giả:** KietTran612  
+
+## ⚠️ Lưu ý & Miễn trừ trách nhiệm
+- Đã kiểm chứng bằng phân tích tĩnh và test nạp DLL. **Chưa chạy thử trong game.** Hãy thử trên tài khoản phụ trước.
+- Bản mod được phát triển cho mục đích học tập, nghiên cứu Reverse Engineering và IL2CPP binary patching. Người dùng tự chịu trách nhiệm khi sử dụng.
+
+---
+**Tác giả:** KietTran612
 **Học Viện Ninja 186 (G4M Studio)**
