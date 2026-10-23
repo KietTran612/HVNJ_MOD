@@ -31,6 +31,9 @@ GAME_SYMBOLS = {
     "mo_dgf": 0x1B5A10,
     "mo_dgj": 0x1B9C90,
     "mo_dgv": 0x1C53F0,
+    "mo_dgw": 0x1C5600,
+    "eq_bkx": 0x476EE0,
+    "lj_cpt": 0x23C820,
     "mo_dky": 0x1E98E0,
     "mo_djf": 0x1E14F0,
     "lm_cua": 0x24E520,
@@ -62,7 +65,7 @@ HOOK_USERS = {
     "core": ["mob", "stage"],
     "mob": ["mob"],
     "clo": ["stage", "party"],
-    "tick": ["quest", "party"],
+    "tick": ["quest", "party", "die"],
 }
 
 SECTION_ALIGN = 0x1000
@@ -334,7 +337,7 @@ def build(original_path, ml64):
             (0x24B5AC, "E8DFE6F6FFE9B9FCFFFF", "E9" + rel32(0x24B5B1, S["clo_stage"]).hex() + "CC" * 5),
         ],
         "tick": [
-            # mo.ctq: gọi mỗi frame (đánh theo nhóm, auto nhiệm vụ ngày)
+            # mo.ctq: gọi mỗi frame (chết - quay về, đánh theo nhóm, auto nhiệm vụ ngày)
             (0x19495E, "E84D0D0200", "E8" + rel32(0x194963, S["quest_tick"]).hex()),
         ],
     }
@@ -347,7 +350,8 @@ def build(original_path, ml64):
             assert orig[off:off + len(ob)] == ob, f"byte goc khong khop tai {rva:#x}"
 
     data_base = layout[data_idx[0]]
-    cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party")}
+    cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party",
+                                         "cfg_die")}
     return dict(
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),

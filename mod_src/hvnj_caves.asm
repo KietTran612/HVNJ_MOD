@@ -22,6 +22,9 @@ EXTERN mo_dga:PROC              ; mo.dga(sbyte index, la taskOrder) - bat auto n
 EXTERN mo_dgf:PROC              ; mo.dgf(int idMap, int idNpc, sbyte option) - tim duong toi NPC
 EXTERN mo_dgj:PROC              ; static mt mo.dgj() - chon quai cho auto thuong
 EXTERN mo_dgv:PROC              ; static mo.dgv(bool isAuto) - bat/tat nut Auto
+EXTERN mo_dgw:PROC              ; static mo.dgw(bool isAuto) - luu/xoa "bai train" ca.fxi
+EXTERN eq_bkx:PROC              ; static eq eq.bkx() - bo tim duong; eq.hcr (+0FCh) = game dang tu quay ve
+EXTERN lj_cpt:PROC              ; lj.cpt() - gui lenh ve lang khi chet (0xF7)
 EXTERN mo_dky:PROC              ; static kk mo.dky(int npcId) - tim NPC trong map
 EXTERN mo_djf:PROC              ; static lm mo.djf(int charId) - tim nhan vat khac trong map
 EXTERN lm_cua:PROC              ; static lm lm.cua() - nhan vat cua minh
@@ -44,8 +47,8 @@ EXTERN dgj_epilogue_tail:PROC   ; mo.dgj: epilogue, ngay sau "xor eax, eax"
 EXTERN clo_store:PROC           ; lm.clo: "mov [rbx+200h], rax" roi return
 
 PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end
-PUBLIC quest_tick, party_leader, party_tick
-PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party
+PUBLIC quest_tick, party_leader, party_tick, die_tick
+PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
 STATICS         EQU 0B8h        ; Il2CppClass::static_fields
@@ -83,6 +86,13 @@ Q_ACCEPT_MS     EQU 4000        ; gui lenh nhan nhiem vu toi da moi 4s
 Q_MAX_ACCEPT    EQU 4           ; 4 lan nhan khong duoc -> het luot / dung
 P_TICK_MS       EQU 100         ; nhip xu ly danh theo nhom
 P_MOVE_MS       EQU 500         ; lap lai lenh chay theo truong nhom toi da moi 0.5s
+EQ_RETURNING    EQU 0FCh        ; eq.hcr: game dang tu ve lang / tu quay lai map
+R_TICK_MS       EQU 200         ; nhip xu ly chet - quay ve
+R_CPT_DELAY_MS  EQU 2000        ; chet 2s ma game chua tu ve lang -> mod gui lenh ve lang
+R_CPT_MS        EQU 3000        ; lap lai lenh ve lang toi da moi 3s
+R_NAV_MS        EQU 10000       ; tim duong ve map cu toi da moi 10s
+R_MAX_NAV       EQU 6           ; 6 lan (~60s) khong ve duoc -> bo
+R_RESUME_MS     EQU 1500        ; ve toi map cu, cho game tu bat Auto 1.5s roi moi bat
 
 ; =============================================================================
 _DATA SEGMENT ALIGN(16)
@@ -94,7 +104,8 @@ cfg_stage       DB 0            ; 1 = tu qua ai Thi Luyen
 cfg_quest       DB 0            ; 1 = auto nhiem vu hang ngay
 cfg_accept      DB 0            ; optionId cua menu(25, 0, ?) de NHAN nhiem vu
 cfg_party       DB 0            ; 1 = danh theo nhom (di theo + danh cung muc tieu truong nhom)
-                DB 6 DUP (0)
+cfg_die         DB 0            ; 1 = chet: ve lang ngay, quay lai map cu, bat lai Auto
+                DB 5 DUP (0)
 ALIGN 8
 st_map          DD 0
                 DD 0
@@ -116,6 +127,16 @@ p_active        DB 0
                 DB 6 DUP (0)
 p_last_tick     DQ 0
 p_last_move     DQ 0
+r_last_tick     DQ 0
+r_dead_at       DQ 0
+r_last_cpt      DQ 0
+r_last_nav      DQ 0
+r_resume_at     DQ 0
+r_map           DD 0
+r_pending       DB 0            ; 1 = da chet luc dang Auto, chua quay lai map cu
+r_active        DB 0
+r_nav_tries     DB 0
+                DB 0
 _DATA ENDS
 
 _TEXT SEGMENT ALIGN(16)
@@ -337,6 +358,13 @@ quest_tick PROC FRAME
     mov     rbx, rcx
     xor     edx, edx
     call    mo_dgd                      ; giu nguyen hanh vi goc
+    cmp     byte ptr [cfg_die], 0
+    je      q_no_die
+    mov     rcx, rbx
+    call    die_tick
+    test    eax, eax
+    jnz     q_resync_auto               ; dang xu ly chet / quay ve map cu
+q_no_die:
     cmp     byte ptr [cfg_party], 0
     je      q_no_party
     call    party_tick
@@ -747,6 +775,192 @@ pt_done:
     pop     rbx
     ret
 party_tick ENDP
+
+; -----------------------------------------------------------------------------
+; Chet - quay ve (goi tu quest_tick moi frame, rcx = mo). Tra ve eax = 1 khi
+; dang xu ly (de tam dung danh theo nhom / auto nhiem vu trong luc do).
+; Game da co san chuoi: chet -> ve lang (lj.cpt) -> tu tim duong ve -> bat
+; Auto, chi chay khi tuy chon Auto ca.fxg bat; --die rut thoi gian cho phat
+; hien chet 15s -> ~1s. Ham nay bao dam phan con lai:
+;  - Chet luc Auto dang bat: nho map. Sau 2s ma game chua tu ve lang (eq.hcr
+;    = 0) thi gui lj.cpt().
+;  - Song lai o map khac: neu game khong tu quay ve (eq.hcr = 0, khong dang
+;    tim duong) thi mo.dgf(map cu) (toi da 6 lan, cach nhau 10s).
+;  - Ve toi map cu ma Auto van tat: cho 1.5s roi bat Auto (dgv + dgw).
+;  - Bo qua Thi Luyen; khi auto nhiem vu ngay dang chay thi de no tu lo.
+; -----------------------------------------------------------------------------
+ALIGN 16
+die_tick PROC FRAME
+    push    rbx
+    .pushreg rbx
+    push    rsi
+    .pushreg rsi
+    push    rdi
+    .pushreg rdi
+    push    r12
+    .pushreg r12
+    sub     rsp, 38h
+    .allocstack 38h
+    .endprolog
+    ; [rsp+20h] tham so thu 5 | [rsp+28h] FILETIME
+    mov     rbx, rcx                    ; rbx = mo
+    lea     rcx, [rsp+28h]
+    call    qword ptr [imp_GetSystemTimeAsFileTime]
+    mov     rax, qword ptr [rsp+28h]
+    xor     edx, edx
+    mov     ecx, 10000
+    div     rcx
+    mov     r12, rax                    ; r12 = bay gio (ms)
+    mov     rcx, rax
+    sub     rcx, qword ptr [r_last_tick]
+    cmp     rcx, R_TICK_MS
+    jb      dt_cached
+    mov     qword ptr [r_last_tick], r12
+    mov     byte ptr [r_active], 0
+    xor     ecx, ecx
+    call    lm_cua
+    test    rax, rax
+    jz      dt_cached
+    mov     rsi, rax                    ; rsi = nhan vat
+    mov     rax, qword ptr [mb_TypeInfo]
+    test    rax, rax
+    jz      dt_cached
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      dt_cached
+    movsx   edi, word ptr [rax+5Ch]     ; edi = map hien tai
+    mov     eax, dword ptr [rsi+LM_STATUS]
+    cmp     eax, STATUS_DEAD
+    je      dt_dead
+    cmp     eax, STATUS_DEADFLY
+    je      dt_dead
+
+    ; ---- dang song ----
+    cmp     byte ptr [r_pending], 0
+    je      dt_cached
+    cmp     byte ptr [q_engaged], 0
+    jne     dt_clear                    ; auto nhiem vu ngay tu dua ve
+    cmp     edi, dword ptr [r_map]
+    jne     dt_away
+    mov     rax, qword ptr [ca_TypeInfo]
+    test    rax, rax
+    jz      dt_busy
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      dt_busy
+    cmp     byte ptr [rax+16h], 0
+    jne     dt_clear                    ; da ve map cu, Auto dang bat -> xong
+    mov     rax, qword ptr [r_resume_at]
+    test    rax, rax
+    jnz     dt_check_resume
+    lea     rax, [r12+R_RESUME_MS]
+    mov     qword ptr [r_resume_at], rax
+    jmp     dt_busy
+dt_check_resume:
+    cmp     r12, rax
+    jb      dt_busy
+    mov     cl, 1                       ; bat lai Auto nhu khi bam nut Auto
+    xor     edx, edx
+    call    mo_dgv
+    mov     cl, 1
+    xor     edx, edx
+    call    mo_dgw
+    nop
+    jmp     dt_clear
+dt_away:
+    mov     qword ptr [r_resume_at], 0
+    xor     ecx, ecx
+    call    eq_bkx
+    test    rax, rax
+    jz      dt_busy
+    cmp     byte ptr [rax+EQ_RETURNING], 0
+    jne     dt_busy                     ; game dang tu quay ve
+    cmp     byte ptr [rbx+MO_NKU], 0
+    jne     dt_busy                     ; dang tim duong
+    mov     rax, r12
+    sub     rax, qword ptr [r_last_nav]
+    cmp     rax, R_NAV_MS
+    jb      dt_busy
+    cmp     byte ptr [r_nav_tries], R_MAX_NAV
+    jae     dt_clear                    ; khong ve duoc -> bo
+    inc     byte ptr [r_nav_tries]
+    mov     qword ptr [r_last_nav], r12
+    mov     rcx, rbx
+    mov     edx, dword ptr [r_map]
+    mov     r8d, -1                     ; khong can toi NPC nao
+    xor     r9d, r9d
+    mov     qword ptr [rsp+20h], 0
+    call    mo_dgf
+    nop
+    jmp     dt_busy
+
+    ; ---- dang chet ----
+dt_dead:
+    lea     eax, [rdi-MAP_TRIAL_FIRST]
+    cmp     eax, MAP_TRIAL_LAST - MAP_TRIAL_FIRST
+    jbe     dt_cached                   ; Thi Luyen: de game tu xu ly
+    cmp     byte ptr [r_pending], 0
+    jne     dt_dead_pending
+    mov     rax, qword ptr [ca_TypeInfo]
+    test    rax, rax
+    jz      dt_cached
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      dt_cached
+    cmp     byte ptr [rax+16h], 0
+    jne     dt_record                   ; chet luc dang Auto
+    xor     ecx, ecx
+    call    eq_bkx
+    test    rax, rax
+    jz      dt_cached
+    cmp     byte ptr [rax+EQ_RETURNING], 0
+    je      dt_cached                   ; khong Auto, game cung khong xu ly -> khong lam gi
+dt_record:
+    mov     byte ptr [r_pending], 1
+    mov     dword ptr [r_map], edi
+    mov     qword ptr [r_dead_at], r12
+    mov     qword ptr [r_last_nav], 0
+    mov     qword ptr [r_resume_at], 0
+    mov     byte ptr [r_nav_tries], 0
+dt_dead_pending:
+    mov     rax, r12
+    sub     rax, qword ptr [r_dead_at]
+    cmp     rax, R_CPT_DELAY_MS
+    jb      dt_busy
+    mov     rax, r12
+    sub     rax, qword ptr [r_last_cpt]
+    cmp     rax, R_CPT_MS
+    jb      dt_busy
+    xor     ecx, ecx
+    call    eq_bkx
+    test    rax, rax
+    jz      dt_busy
+    cmp     byte ptr [rax+EQ_RETURNING], 0
+    jne     dt_busy                     ; game da tu gui lenh ve lang
+    mov     qword ptr [r_last_cpt], r12
+    xor     ecx, ecx
+    call    lj_cmy
+    test    rax, rax
+    jz      dt_busy
+    mov     rcx, rax
+    xor     edx, edx
+    call    lj_cpt
+    nop
+    jmp     dt_busy
+dt_clear:
+    mov     byte ptr [r_pending], 0
+    jmp     dt_cached
+dt_busy:
+    mov     byte ptr [r_active], 1
+dt_cached:
+    movzx   eax, byte ptr [r_active]
+    add     rsp, 38h
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+die_tick ENDP
 
 ; ---- hang so chi doc --------------------------------------------------------
 ALIGN 16

@@ -18,8 +18,30 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 - Auto thường (`mo.dgj`) chọn **quái thường gần nhất**. Quái Tinh Anh (`levelBoss == 1`), Thủ Lĩnh (`levelBoss == 2`) và Boss (`isBos`) bị bỏ qua.
 - Auto nhiệm vụ (`mo.dgl`) cũng bỏ qua các loại quái trên.
 
-### 2. ⏱️ Chết quay về ngay — `--die`
-Bỏ đếm ngược khi chết: 15 nhịp còn 1 nhịp, hộp thoại 500 frame còn 2 frame.
+### 2. ⏱️ Chết: về làng ngay, quay lại map cũ, bật lại Auto — `--die`
+Áp dụng khi nhân vật chết **lúc đang bật Auto**.
+
+**Cơ chế có sẵn của game:**
+1. Khi Auto bật, `mo.ctq` đặt đếm ngược `mo.nib = 15`.
+2. `mo.dfq` chạy mỗi giây: khi đếm về 0 mà nhân vật đang chết thì gửi lệnh về làng (`lj.cpt`) và nhớ map lúc chết.
+3. Vào map mới, `mo.dek` tự tìm đường về map đó rồi bật lại Auto.
+
+Cơ chế này chỉ chạy khi tuỳ chọn Auto `ca.fxg` đang bật (mặc định là bật). Với game gốc, sau khi chết phải **chờ tới 15 giây** mới về làng.
+
+**Mod làm thêm:**
+
+| Bước | Mod làm gì |
+|---|---|
+| Phát hiện chết | Đếm ngược 15 → 1, nên về làng sau khoảng 1–2 giây. Hộp thoại chết đếm 500 → 2 frame. |
+| Game không tự về làng | Chết 2 giây mà game chưa gửi lệnh về làng (ví dụ tắt tuỳ chọn Auto) thì mod gửi `lj.cpt`, lặp lại mỗi 3 giây. |
+| Hồi sinh ở map khác | Nếu game không tự quay về (`eq.hcr = 0`, không đang tìm đường) thì mod tìm đường về **map lúc chết**: tối đa 6 lần, mỗi lần cách 10 giây. |
+| Về tới map cũ | Chờ 1.5 giây cho game tự bật Auto. Nếu Auto vẫn tắt thì mod bật lại, giống bấm nút Auto. |
+
+- Khi game đang tự xử lý (`eq.hcr = 1`), mod đứng yên, không giành điều khiển.
+- Bỏ qua Thí Luyện (161–167), vì map ải không đi bộ vào lại được.
+- Nếu auto nhiệm vụ ngày (`--quest`) đang chạy thì để nó tự đưa nhân vật về map nhiệm vụ.
+- Trong lúc xử lý chết, đánh theo nhóm và auto nhiệm vụ tạm dừng. Về tới map cũ thì đánh theo nhóm tiếp tục như bình thường.
+- Chết lúc **không** bật Auto: mod không làm gì.
 
 ### 3. 🏰 Giữ Auto trong Thí Luyện — `--trial`
 Game không còn tự tắt Auto khi vào map 161 và không còn chặn tìm đường trong map 161. Khi chết và hồi sinh ở cửa, Auto tự chạy lại bãi quái.
@@ -132,7 +154,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
 | `0x1BA485` | `mo.dgl` | lọc quái của auto nhiệm vụ |
 | `0x24B5AC` | `lm.clo` | chọn mục tiêu: theo trưởng nhóm, tự qua ải Thí Luyện |
-| `0x19495E` | `mo.ctq` | mỗi frame: đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
+| `0x19495E` | `mo.ctq` | mỗi frame: chết - quay về, đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
 | `0x1927E2`, `0x192912`, `0x3612E0`, `0x360946` | `mo.ctq`, `hw.cdy`, `hw.cdq` | bỏ đếm ngược khi chết |
 | `0x19C061`, `0x477CBF` | `mo.dek`, `eq.bld` | Auto và tìm đường trong map 161 |
 

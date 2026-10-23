@@ -93,6 +93,15 @@ def test_combinations(orig):
             rec = P.strip_payload(out) if P.has_payload(out) else P.strip_legacy(out)
             check(sha(rec) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)}")
             check(skill_is_original(out), f"patch 0.3s đã gỡ vẫn còn trong {sorted(feats)}")
+            check(P.has_payload(out) == bool(feats & set(P.PAYLOAD_FEATURES)), f"payload {sorted(feats)}")
+            if P.has_payload(out):
+                cfg = P.rva_to_off(out, P.PAYLOAD_DATA_RVA)
+                for f in P.PAYLOAD_FEATURES:
+                    check(out[cfg + P.PAYLOAD_CFG["cfg_" + f]] == (f in feats), f"cfg_{f} trong {sorted(feats)}")
+                for g, users in P.PAYLOAD_HOOK_USERS.items():
+                    want = bool(feats & set(users))
+                    got = all(P.read_at(out, rva, len(n) // 2) == bytes.fromhex(n) for rva, _o, n in P.PAYLOAD_HOOKS[g])
+                    check(got == want, f"nhóm hook {g} trong {sorted(feats)}")
             old = with_retired_skill(out)
             check(P.detect(old)[0] == feats and P.detect_retired(old) == {"skill"}, f"nhận diện 0.3s cũ {sorted(feats)}")
             rec = P.strip_payload(old) if P.has_payload(old) else P.strip_legacy(old)
@@ -163,6 +172,7 @@ FRAME_FUNCS = {
     "quest_tick": (0x40, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbx"]),
     "party_leader": (0x28, ["Rsi", "Rbx"]),
     "party_tick": (0x30, ["Rdi", "Rsi", "Rbx"]),
+    "die_tick": (0x38, ["R12", "Rdi", "Rsi", "Rbx"]),
 }
 
 
