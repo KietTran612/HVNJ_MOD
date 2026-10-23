@@ -51,7 +51,20 @@ Game không còn tự tắt Auto khi vào map 161 và không còn chặn tìm đ
 - Nếu không tìm thấy quái nào **liên tục 2.5 giây**:
   - ở ải 161–166: nhân vật chạy tới cổng sang ải kế tiếp;
   - ở ải 167: Auto tự tắt.
+- **Chọn cổng:** danh sách cổng của game (`mb.nal`) chứa cổng của **mọi** map. Mod lọc các cổng nằm ở map hiện tại (`le+0x18`), rồi ưu tiên cổng dẫn sang `map + 1` (`le+0x1A`), giống cách bộ tìm đường của game làm. Nếu không có cổng sang `map + 1`, mod dùng cổng đầu tiên dẫn tới một ải lớn hơn, tối đa 167.
 - Tính năng này tự kèm phần sửa chọn quái của `mo.dgj` (dùng chung với `--mob`), nên bật riêng `--stage` vẫn chạy được.
+
+**Thí Luyện theo nhóm** (bật cùng `--party`):
+
+| Ai | Làm gì |
+|---|---|
+| Trưởng nhóm | Auto đánh hết quái, rồi tự qua cổng sang ải kế tiếp, như khi đánh một mình. |
+| Thành viên, trưởng nhóm còn trong ải | Đánh đúng con quái trưởng nhóm đang đánh. Trưởng nhóm không đánh thì chạy theo, kể cả khi trưởng nhóm đi tới cổng. |
+| Thành viên, trưởng nhóm vừa qua cổng | Đánh nốt quái còn lại quanh mình (nếu có), rồi **đi tới cổng ngay**, không chờ 2.5 giây. Sang ải mới lại gặp trưởng nhóm và tiếp tục theo. |
+
+> ⚠️ **Chưa kiểm chứng trong game:**
+> - Client chỉ xử lý riêng map 161. Khoảng ải 161–167 lấy theo bản v1.
+> - Chưa rõ Thí Luyện có cho cả nhóm vào cùng một ải hay không. Nếu mỗi người vào một phòng riêng, mỗi nhân vật sẽ tự qua ải như khi đánh một mình.
 
 ### 5. 📜 Auto nhiệm vụ hàng ngày — `--quest`
 Mod không tự viết logic đi lại hay đánh quái mà gọi lại chức năng **"Bấm vào đây để tự động làm nhiệm vụ"** có sẵn trong game (`mo.dga` → `mo.dgh`).

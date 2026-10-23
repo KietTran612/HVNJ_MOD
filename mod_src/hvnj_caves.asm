@@ -108,7 +108,7 @@ cfg_die         DB 0            ; 1 = chet: ve lang ngay, quay lai map cu, bat l
                 DB 5 DUP (0)
 ALIGN 8
 st_map          DD 0
-                DD 0
+st_party_map    DD -1           ; map co truong nhom o lan cuoi thay (danh theo nhom)
 st_empty_since  DQ 0
 st_last_act     DQ 0
 st_ft           DQ 0
@@ -240,6 +240,18 @@ same_map:
     xor     edx, edx
     mov     ecx, 10000
     div     rcx                         ; rax = thoi gian (ms)
+    ; danh theo nhom: truong nhom vua roi ai nay (vua thay o map nay, gio khong con)
+    ; -> di toi cong ngay, khong cho STAGE_CLEAR_MS
+    cmp     byte ptr [cfg_party], 0
+    je      no_party_skip
+    mov     ecx, dword ptr [st_map]
+    cmp     ecx, dword ptr [st_party_map]
+    jne     no_party_skip
+    mov     dword ptr [st_party_map], -1
+    lea     rcx, [rax-STAGE_CLEAR_MS]
+    mov     qword ptr [st_empty_since], rcx
+    mov     qword ptr [st_last_act], 0
+no_party_skip:
     mov     rcx, qword ptr [st_empty_since]
     test    rcx, rcx
     jnz     have_since
@@ -276,23 +288,41 @@ portal:
     mov     r8, qword ptr [r8+10h]      ; _items (le[])
     test    r8, r8
     jz      store_null
+    ; mb.nal chua cong cua MOI map: le.mco (+18h) = map chua cong, le.mcp (+1Ah) = map dich
+    ; (giong eq.bld). Uu tien cong sang map+1; khong co thi lay cong dau tien di toi
+    ; mot ai lon hon (<= MAP_TRIAL_LAST).
     mov     edx, dword ptr [st_map]
-    inc     edx                         ; map dich = map hien tai + 1
     xor     ecx, ecx
+    xor     eax, eax                    ; rax = cong du phong
 wp_loop:
     cmp     ecx, r10d
-    jge     store_null
+    jge     wp_end
     cmp     ecx, dword ptr [r8+18h]     ; max_length cua mang
-    jae     store_null
+    jae     wp_end
     mov     r9, qword ptr [r8+rcx*8+20h]
     test    r9, r9
     jz      wp_next
-    movsx   r11d, word ptr [r9+1Ah]     ; le.mcp = map dich
+    movsx   r11d, word ptr [r9+18h]
     cmp     r11d, edx
-    je      wp_found
+    jne     wp_next                     ; cong cua map khac
+    movsx   r11d, word ptr [r9+1Ah]
+    sub     r11d, edx
+    cmp     r11d, 1
+    je      wp_found                    ; cong sang map+1
+    jl      wp_next                     ; cong lui
+    test    rax, rax
+    jnz     wp_next
+    movsx   r11d, word ptr [r9+1Ah]
+    cmp     r11d, MAP_TRIAL_LAST
+    jg      wp_next
+    mov     rax, r9
 wp_next:
     inc     ecx
     jmp     wp_loop
+wp_end:
+    test    rax, rax
+    jz      store_null
+    mov     r9, rax
 wp_found:
     movsx   eax, word ptr [r9+10h]      ; tam cua vung cong
     movsx   ecx, word ptr [r9+14h]
@@ -728,6 +758,15 @@ party_tick PROC FRAME
     jz      pt_inactive
     mov     rsi, rax                    ; rsi = truong nhom
     mov     byte ptr [p_active], 1
+    mov     rax, qword ptr [mb_TypeInfo] ; nho map co truong nhom (Thi Luyen: truong nhom
+    test    rax, rax                     ; roi ai thi thanh vien di toi cong ngay)
+    jz      pt_no_map
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      pt_no_map
+    movsx   eax, word ptr [rax+5Ch]
+    mov     dword ptr [st_party_map], eax
+pt_no_map:
     xor     ecx, ecx
     call    lm_cua
     test    rax, rax
