@@ -32,13 +32,28 @@ EXTERN lm_czd:PROC              ; lm.czd(float xTo, float yTo) - di bo toi toa d
 EXTERN lj_cmy:PROC              ; static lj lj.cmy() - Service
 EXTERN lj_menu:PROC             ; lj.menu(int npcId, int menuId, int optionId)
 EXTERN ht_cbt:PROC              ; static float ht.cbt(x1, y1, x2, y2) - khoang cach
+EXTERN bc_ctor:PROC             ; bc..ctor(sbyte command) - Message
+EXTERN bl_bat:PROC              ; bl.bat(int value) - writeByte
 EXTERN imp_GetSystemTimeAsFileTime:QWORD   ; o IAT cua KERNEL32
+
+; ---- Ham runtime IL2CPP (game cung goi y nhu vay) ----------------------------
+EXTERN il2cpp_init_md:PROC      ; InitializeRuntimeMetadata(void** slot) - resolve con tro TypeInfo
+EXTERN il2cpp_class_init:PROC   ; chay static constructor cua class (Il2CppClass*)
+EXTERN il2cpp_object_new:PROC   ; object_new(Il2CppClass*)
+EXTERN il2cpp_array_new:PROC    ; array_new_specific(Il2CppClass* arrayClass, length)
+EXTERN il2cpp_iface_invoke1:PROC ; InterfaceActionInvoker1: (slot, interface, obj, arg)
 
 ; ---- Con tro TypeInfo (Il2CppClass*), static fields o +0B8h -----------------
 EXTERN ca_TypeInfo:QWORD        ; ca.fxf (+16h) = trang thai nut Auto
 EXTERN mb_TypeInfo:QWORD        ; mb.naj (+5Ch) = map hien tai, mb.nal (+60h) = List<le> cong
 EXTERN mo_TypeInfo:QWORD        ; mo.nfl (+80h) = List<la> nhiem vu (task order)
 EXTERN gb_TypeInfo:QWORD        ; gb.hxf (+18h) = List<ko> thanh vien nhom, [0] = truong nhom
+EXTERN mc_TypeInfo:QWORD        ; mc.nde (+108h) = diem cua da theo id, mc.ncx (+0D0h) = phi luyen
+EXTERN hw_TypeInfo:QWORD        ; hw.jul (+128h) = popup dang mo
+EXTERN ek_TypeInfo:QWORD        ; ek = popup Luyen da: ek.gxw (+0) = instance, ek.gyo (+8) = o luyen
+EXTERN jr_array_TypeInfo:QWORD  ; jr[] (mang vat pham)
+EXTERN bc_TypeInfo:QWORD        ; bc = Message
+EXTERN hs_TypeInfo:QWORD        ; hs = interface ISession (slot 3 = gui message)
 
 ; ---- Diem quay lai ben trong ham game ---------------------------------------
 EXTERN dgj_accept:PROC          ; mo.dgj: tiep tuc xet con quai (tinh khoang cach)
@@ -47,8 +62,8 @@ EXTERN dgj_epilogue_tail:PROC   ; mo.dgj: epilogue, ngay sau "xor eax, eax"
 EXTERN clo_store:PROC           ; lm.clo: "mov [rbx+200h], rax" roi return
 
 PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end
-PUBLIC quest_tick, party_leader, party_tick, die_tick
-PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die
+PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick
+PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone, cfg_stone_xu
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
 STATICS         EQU 0B8h        ; Il2CppClass::static_fields
@@ -67,6 +82,23 @@ LA_TASKID       EQU 10h         ; la.mad: 0 = nhiem vu hang ngay
 LA_COUNT        EQU 14h         ; la.mae
 LA_MAX          EQU 18h         ; la.maf
 LA_MAP          EQU 3Ch         ; la.mak
+LM_XU           EQU 140h        ; lm.mie (long)
+LM_YEN          EQU 150h        ; lm.mig (long)
+LM_BAG          EQU 1B8h        ; lm.miv: jr[] hanh trang
+JR_TEMPLATE     EQU 10h         ; jr.leu: js (template)
+JR_INDEX        EQU 28h         ; jr.ley: indexUI
+JR_LOCK         EQU 38h         ; jr.lfc: da khoa
+JR_SELECTED     EQU 5Eh         ; jr.lfn: dang nam trong o cua popup Luyen da
+JS_ID           EQU 10h         ; js.lfv (short)
+JS_TYPE         EQU 12h         ; js.lfw (sbyte)
+MC_CRYSTALS     EQU 108h        ; mc.nde: int[] diem cua da theo id
+MC_CRYSTAL_FEE  EQU 0D0h        ; mc.ncx: int[] phi luyen ra da id t
+HW_POPUP        EQU 128h        ; hw.jul
+EK_STANDS       EQU 8           ; ek.gyo
+LJ_SESSION      EQU 10h         ; lj.mdv: hs
+BC_WRITER       EQU 20h         ; bc.frf: bl
+CLASS_HAS_CCTOR EQU 133h        ; Il2CppClass: bit 2 = co static constructor
+CLASS_CCTOR_DONE EQU 0E0h       ; Il2CppClass: static constructor da chay
 
 STATUS_DEAD     EQU 14
 STATUS_DEADFLY  EQU 5
@@ -93,6 +125,17 @@ R_CPT_MS        EQU 3000        ; lap lai lenh ve lang toi da moi 3s
 R_NAV_MS        EQU 10000       ; tim duong ve map cu toi da moi 10s
 R_MAX_NAV       EQU 6           ; 6 lan (~60s) khong ve duoc -> bo
 R_RESUME_MS     EQU 1500        ; ve toi map cu, cho game tu bat Auto 1.5s roi moi bat
+S_TICK_MS       EQU 1000        ; nhip kiem tra hanh trang
+S_WAIT_MS       EQU 3000        ; sau moi lan luyen, cho server cap nhat hanh trang
+S_IDLE_MS       EQU 30000       ; khong co cach luyen 100% / khong du tien -> xet lai sau 30s
+S_FAIL_MS       EQU 300000      ; server khong xu ly S_MAX_FAILS lan lien tiep -> nghi 5 phut
+S_MAX_FAILS     EQU 2
+S_FREE_MAX      EQU 1           ; con <= 1 o trong thi coi la day
+S_MAX_STONES    EQU 24          ; popup Luyen da co 24 o
+S_MAX_ID        EQU 12          ; da id 0..11 (cap 1..12)
+ITEM_TYPE_STONE EQU 26
+CMD_STONE_XU    EQU 19          ; lj.cpc: luyen bang xu (giu trang thai khoa)
+CMD_STONE_YEN   EQU 20          ; lj.cpe: luyen bang yen (+ xu neu thieu), da ra bi khoa
 
 ; =============================================================================
 _DATA SEGMENT ALIGN(16)
@@ -105,7 +148,9 @@ cfg_quest       DB 0            ; 1 = auto nhiem vu hang ngay
 cfg_accept      DB 0            ; optionId cua menu(25, 0, ?) de NHAN nhiem vu
 cfg_party       DB 0            ; 1 = danh theo nhom (di theo + danh cung muc tieu truong nhom)
 cfg_die         DB 0            ; 1 = chet: ve lang ngay, quay lai map cu, bat lai Auto
-                DB 5 DUP (0)
+cfg_stone       DB 0            ; 1 = tu luyen da tai cho khi hanh trang day (luc Auto)
+cfg_stone_xu    DB 0            ; 1 = tra phi luyen bang xu, 0 = bang yen
+                DB 3 DUP (0)
 ALIGN 8
 st_map          DD 0
 st_party_map    DD -1           ; map co truong nhom o lan cuoi thay (danh theo nhom)
@@ -137,6 +182,14 @@ r_pending       DB 0            ; 1 = da chet luc dang Auto, chua quay lai map c
 r_active        DB 0
 r_nav_tries     DB 0
                 DB 0
+s_last_tick     DQ 0
+s_wait_until    DQ 0
+s_sent_item     DQ 0            ; vien da dau tien cua lan luyen truoc (de biet server da xu ly chua)
+s_sent_slot     DD 0
+s_fails         DB 0
+                DB 3 DUP (0)
+s_cnt           DD 2 * S_MAX_ID DUP (0)  ; so da theo [nhom][id]; nhom 1 = da khoa (chi khi tra xu)
+s_idx           DB S_MAX_STONES DUP (0)  ; indexUI cac vien se luyen
 _DATA ENDS
 
 _TEXT SEGMENT ALIGN(16)
@@ -353,8 +406,8 @@ clo_stage_end LABEL NEAR
 
 ; -----------------------------------------------------------------------------
 ; Goi tu mo.ctq thay cho "call mo.dgd". rcx = mo (this).
-; Danh theo nhom (party_tick) chay truoc; khi dang di theo truong nhom thi
-; auto nhiem vu tam dung.
+; Luyen da (stone_tick) chay doc lap. Danh theo nhom (party_tick) chay truoc
+; auto nhiem vu; khi dang di theo truong nhom thi auto nhiem vu tam dung.
 ; Auto nhiem vu hang ngay dua tren pipeline "tu dong lam nhiem vu" cua game:
 ;   - Nguoi choi bat Auto (canh len cua ca.fxf) ngoai Thi Luyen -> kich hoat.
 ;   - Chua co nhiem vu ngay: ve truong theo he phai, toi NPC 25, gui
@@ -388,6 +441,10 @@ quest_tick PROC FRAME
     mov     rbx, rcx
     xor     edx, edx
     call    mo_dgd                      ; giu nguyen hanh vi goc
+    cmp     byte ptr [cfg_stone], 0
+    je      q_no_stone
+    call    stone_tick
+q_no_stone:
     cmp     byte ptr [cfg_die], 0
     je      q_no_die
     mov     rcx, rbx
@@ -1000,6 +1057,405 @@ dt_cached:
     pop     rbx
     ret
 die_tick ENDP
+
+; -----------------------------------------------------------------------------
+; Luyen da tai cho (goi tu quest_tick moi frame). Khi Auto dang bat va hanh
+; trang con <= S_FREE_MAX o trong: chon mot nhom da co tong diem (mc.nde) BANG
+; DUNG diem cua mot cap cao hon (= ti le 100%, khong mat da), uu tien cap
+; thap nhat, toi da 24 vien, du phi (mc.ncx), roi gui packet giong nut "Luyen"
+; cua popup Luyen da (ek.bjx -> lj.cpe / lj.cpc) nhung khong mo hop thoai:
+;   - tra yen: cmd 20, da ra bi khoa;
+;   - tra xu : cmd 19, chi gop da cung trang thai khoa de da khong khoa van
+;              khong khoa.
+; Moi lan chi luyen 1 nhom; cho S_WAIT_MS de server cap nhat hanh trang roi
+; xet tiep. Neu sau S_MAX_FAILS lan hanh trang khong doi (server tu choi, vd
+; khong o gan NPC) thi nghi S_FAIL_MS. Bo qua da dang chon trong popup va khi
+; popup Luyen da dang mo.
+; -----------------------------------------------------------------------------
+ALIGN 16
+stone_tick PROC FRAME
+    push    rbx
+    .pushreg rbx
+    push    rbp
+    .pushreg rbp
+    push    rsi
+    .pushreg rsi
+    push    rdi
+    .pushreg rdi
+    push    r12
+    .pushreg r12
+    push    r13
+    .pushreg r13
+    push    r14
+    .pushreg r14
+    push    r15
+    .pushreg r15
+    sub     rsp, 68h
+    .allocstack 68h
+    .endprolog
+    ; [rsp+20h] FILETIME | [rsp+30h] so vien lay theo id (S_MAX_ID x DD)
+    lea     rcx, [rsp+20h]
+    call    qword ptr [imp_GetSystemTimeAsFileTime]
+    mov     rax, qword ptr [rsp+20h]
+    xor     edx, edx
+    mov     ecx, 10000
+    div     rcx
+    mov     r15, rax                    ; r15 = bay gio (ms)
+    mov     rcx, rax
+    sub     rcx, qword ptr [s_last_tick]
+    cmp     rcx, S_TICK_MS
+    jb      sk_done
+    mov     qword ptr [s_last_tick], r15
+    cmp     r15, qword ptr [s_wait_until]
+    jb      sk_done
+
+    mov     rax, qword ptr [ca_TypeInfo]
+    test    rax, rax
+    jz      sk_done
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      sk_done
+    cmp     byte ptr [rax+16h], 0       ; chi khi Auto dang bat
+    je      sk_done
+    mov     rax, qword ptr [hw_TypeInfo] ; popup Luyen da dang mo -> nguoi choi tu luyen
+    test    rax, rax
+    jz      sk_done
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      sk_done
+    mov     rcx, qword ptr [rax+HW_POPUP]
+    test    rcx, rcx
+    jz      sk_no_popup
+    mov     rax, qword ptr [ek_TypeInfo]
+    test    rax, rax
+    jz      sk_no_popup
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      sk_no_popup
+    cmp     rcx, qword ptr [rax]
+    je      sk_done
+sk_no_popup:
+    xor     ecx, ecx
+    call    lm_cua
+    test    rax, rax
+    jz      sk_done
+    mov     rbx, rax                    ; rbx = nhan vat
+    mov     eax, dword ptr [rbx+LM_STATUS]
+    cmp     eax, STATUS_DEAD
+    je      sk_done
+    cmp     eax, STATUS_DEADFLY
+    je      sk_done
+    mov     rsi, qword ptr [rbx+LM_BAG]
+    test    rsi, rsi
+    jz      sk_done                     ; rsi = jr[] hanh trang
+    mov     rax, qword ptr [mc_TypeInfo]
+    test    rax, rax
+    jz      sk_done
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      sk_done
+    mov     r12, qword ptr [rax+MC_CRYSTALS]
+    test    r12, r12
+    jz      sk_done
+    mov     r13, qword ptr [rax+MC_CRYSTAL_FEE]
+    test    r13, r13
+    jz      sk_done
+    ; r14d = cap dich lon nhat = min(len diem, len phi, S_MAX_ID) - 1
+    mov     eax, dword ptr [r12+18h]
+    mov     ecx, dword ptr [r13+18h]
+    cmp     ecx, eax
+    cmovb   eax, ecx
+    mov     ecx, S_MAX_ID
+    cmp     eax, ecx
+    cmova   eax, ecx
+    dec     eax
+    cmp     eax, 1
+    jl      sk_done
+    mov     r14d, eax
+
+    ; ---- dem o trong va da theo [nhom][id] ----
+    lea     rdi, [s_cnt]
+    xor     eax, eax
+    mov     ecx, 2 * S_MAX_ID
+    rep stosd
+    lea     r10, [s_cnt]
+    mov     r9d, dword ptr [rsi+18h]
+    xor     edi, edi                    ; edi = so o trong
+    xor     ecx, ecx
+sk_scan:
+    cmp     ecx, r9d
+    jae     sk_scanned
+    mov     rax, qword ptr [rsi+rcx*8+20h]
+    test    rax, rax
+    jnz     sk_scan_item
+    inc     edi
+    jmp     sk_scan_next
+sk_scan_item:
+    mov     rdx, qword ptr [rax+JR_TEMPLATE]
+    test    rdx, rdx
+    jz      sk_scan_next
+    cmp     byte ptr [rdx+JS_TYPE], ITEM_TYPE_STONE
+    jne     sk_scan_next
+    movsx   edx, word ptr [rdx+JS_ID]
+    cmp     edx, r14d
+    jae     sk_scan_next                ; id < cap dich lon nhat (loai ca id am)
+    cmp     byte ptr [rax+JR_SELECTED], 0
+    jne     sk_scan_next
+    cmp     byte ptr [cfg_stone_xu], 0
+    je      sk_scan_count
+    cmp     byte ptr [rax+JR_LOCK], 0
+    je      sk_scan_count
+    add     edx, S_MAX_ID               ; nhom da khoa
+sk_scan_count:
+    inc     dword ptr [r10+rdx*4]
+sk_scan_next:
+    inc     ecx
+    jmp     sk_scan
+sk_scanned:
+    ; ---- lan luyen truoc da duoc server xu ly chua? ----
+    mov     rax, qword ptr [s_sent_item]
+    test    rax, rax
+    jz      sk_check_full
+    mov     qword ptr [s_sent_item], 0
+    mov     ecx, dword ptr [s_sent_slot]
+    cmp     ecx, r9d
+    jae     sk_changed
+    cmp     rax, qword ptr [rsi+rcx*8+20h]
+    jne     sk_changed
+    inc     byte ptr [s_fails]
+    cmp     byte ptr [s_fails], S_MAX_FAILS
+    jb      sk_check_full
+    mov     byte ptr [s_fails], 0
+    mov     rax, r15
+    add     rax, S_FAIL_MS
+    mov     qword ptr [s_wait_until], rax
+    jmp     sk_done
+sk_changed:
+    mov     byte ptr [s_fails], 0
+sk_check_full:
+    cmp     edi, S_FREE_MAX
+    ja      sk_done
+
+    ; ---- chon nhom da: rdi = hang dem cua nhom, ebp = cap dich t ----
+    lea     rdi, [s_cnt]
+sk_group:
+    mov     ebp, 1
+sk_target:
+    cmp     ebp, r14d
+    jg      sk_next_group
+    movsxd  r8, dword ptr [r12+rbp*4+20h]   ; r8 = diem can = mc.nde[t]
+    test    r8, r8
+    jle     sk_next_target
+    xor     r10d, r10d                  ; r10 = tong diem
+    xor     r11d, r11d                  ; r11d = so vien
+    lea     ecx, [rbp-1]                ; lay tu cap t-1 xuong 0
+sk_take:
+    movsxd  r9, dword ptr [r12+rcx*4+20h]
+    xor     eax, eax
+    test    r9, r9
+    jle     sk_take_put
+    mov     rax, r8
+    sub     rax, r10
+    xor     edx, edx
+    div     r9                          ; rax = so vien toi da con vua
+    mov     edx, dword ptr [rdi+rcx*4]
+    cmp     rax, rdx
+    cmova   rax, rdx
+    mov     edx, S_MAX_STONES
+    sub     edx, r11d
+    cmp     rax, rdx
+    cmova   rax, rdx
+    add     r11d, eax
+    mov     rdx, rax
+    imul    rdx, r9
+    add     r10, rdx
+sk_take_put:
+    mov     dword ptr [rsp+rcx*4+30h], eax
+    dec     ecx
+    jns     sk_take
+    cmp     r10, r8
+    jne     sk_next_target              ; khong ra dung 100%
+    cmp     r11d, 2
+    jb      sk_next_target
+    movsxd  rax, dword ptr [r13+rbp*4+20h]  ; phi luyen ra da t
+    mov     rdx, qword ptr [rbx+LM_XU]
+    cmp     byte ptr [cfg_stone_xu], 0
+    jne     sk_fee
+    add     rdx, qword ptr [rbx+LM_YEN]
+sk_fee:
+    cmp     rax, rdx
+    jle     sk_found
+sk_next_target:
+    inc     ebp
+    jmp     sk_target
+sk_next_group:
+    cmp     byte ptr [cfg_stone_xu], 0
+    je      sk_idle
+    lea     rax, [s_cnt + 4 * S_MAX_ID]
+    cmp     rdi, rax
+    je      sk_idle
+    mov     rdi, rax
+    jmp     sk_group
+
+    ; ---- lay indexUI cac vien da chon ----
+sk_found:
+    lea     rax, [s_cnt + 4 * S_MAX_ID]
+    xor     r9d, r9d
+    cmp     rdi, rax
+    sete    r9b                         ; r9d = nhom (1 = da khoa)
+    mov     r10d, dword ptr [rsi+18h]
+    lea     rdi, [s_idx]
+    xor     ecx, ecx
+    xor     r11d, r11d
+sk_pick:
+    cmp     ecx, r10d
+    jae     sk_picked
+    mov     rax, qword ptr [rsi+rcx*8+20h]
+    test    rax, rax
+    jz      sk_pick_next
+    mov     rdx, qword ptr [rax+JR_TEMPLATE]
+    test    rdx, rdx
+    jz      sk_pick_next
+    cmp     byte ptr [rdx+JS_TYPE], ITEM_TYPE_STONE
+    jne     sk_pick_next
+    movsx   edx, word ptr [rdx+JS_ID]
+    cmp     edx, ebp
+    jae     sk_pick_next
+    cmp     byte ptr [rax+JR_SELECTED], 0
+    jne     sk_pick_next
+    cmp     byte ptr [cfg_stone_xu], 0
+    je      sk_pick_take
+    movzx   r8d, byte ptr [rax+JR_LOCK]
+    test    r8d, r8d
+    setnz   r8b
+    cmp     r8d, r9d
+    jne     sk_pick_next
+sk_pick_take:
+    cmp     dword ptr [rsp+rdx*4+30h], 0
+    je      sk_pick_next
+    dec     dword ptr [rsp+rdx*4+30h]
+    mov     edx, dword ptr [rax+JR_INDEX]
+    mov     byte ptr [rdi+r11], dl
+    test    r11d, r11d
+    jnz     sk_pick_more
+    mov     qword ptr [s_sent_item], rax
+    mov     dword ptr [s_sent_slot], ecx
+sk_pick_more:
+    inc     r11d
+    cmp     r11d, S_MAX_STONES
+    jae     sk_picked
+sk_pick_next:
+    inc     ecx
+    jmp     sk_pick
+sk_picked:
+    cmp     r11d, 2
+    jb      sk_abort
+    mov     r14d, r11d                  ; r14d = so vien se gui
+
+    ; ---- ek.gyo phai khac null: ham nhan ket qua cua game (lm.cyg) duyet mang nay ----
+    lea     rcx, [ek_TypeInfo]
+    call    il2cpp_init_md
+    mov     rcx, qword ptr [ek_TypeInfo]
+    test    rcx, rcx
+    jz      sk_abort
+    test    byte ptr [rcx+CLASS_HAS_CCTOR], 2
+    jz      sk_ek_ready
+    cmp     dword ptr [rcx+CLASS_CCTOR_DONE], 0
+    jne     sk_ek_ready
+    call    il2cpp_class_init
+    mov     rcx, qword ptr [ek_TypeInfo]
+sk_ek_ready:
+    mov     rax, qword ptr [rcx+STATICS]
+    test    rax, rax
+    jz      sk_abort
+    cmp     qword ptr [rax+EK_STANDS], 0
+    jne     sk_have_stands
+    lea     rcx, [jr_array_TypeInfo]
+    call    il2cpp_init_md
+    mov     rcx, qword ptr [jr_array_TypeInfo]
+    test    rcx, rcx
+    jz      sk_abort
+    mov     edx, S_MAX_STONES           ; giong ek.bjt: gyo = new jr[24]
+    call    il2cpp_array_new
+    test    rax, rax
+    jz      sk_abort
+    mov     rcx, qword ptr [ek_TypeInfo]
+    mov     rcx, qword ptr [rcx+STATICS]
+    mov     qword ptr [rcx+EK_STANDS], rax
+sk_have_stands:
+    ; ---- gui packet: new Message(cmd), writeByte(indexUI) tung vien, session.zs(msg) ----
+    xor     ecx, ecx
+    call    lj_cmy
+    test    rax, rax
+    jz      sk_abort
+    mov     rbp, rax                    ; rbp = Service
+    cmp     qword ptr [rbp+LJ_SESSION], 0
+    je      sk_abort
+    lea     rcx, [bc_TypeInfo]
+    call    il2cpp_init_md
+    lea     rcx, [hs_TypeInfo]
+    call    il2cpp_init_md
+    mov     rcx, qword ptr [bc_TypeInfo]
+    test    rcx, rcx
+    jz      sk_abort
+    call    il2cpp_object_new
+    test    rax, rax
+    jz      sk_abort
+    mov     rdi, rax                    ; rdi = Message
+    mov     rcx, rax
+    mov     edx, CMD_STONE_YEN
+    cmp     byte ptr [cfg_stone_xu], 0
+    je      sk_cmd
+    mov     edx, CMD_STONE_XU
+sk_cmd:
+    xor     r8d, r8d
+    call    bc_ctor
+    xor     esi, esi
+sk_write:
+    cmp     esi, r14d
+    jae     sk_flush
+    mov     rcx, qword ptr [rdi+BC_WRITER]
+    test    rcx, rcx
+    jz      sk_abort
+    lea     rax, [s_idx]
+    movzx   edx, byte ptr [rax+rsi]
+    xor     r8d, r8d
+    call    bl_bat
+    inc     esi
+    jmp     sk_write
+sk_flush:
+    mov     r8, qword ptr [rbp+LJ_SESSION]
+    test    r8, r8
+    jz      sk_abort
+    mov     rdx, qword ptr [hs_TypeInfo]
+    test    rdx, rdx
+    jz      sk_abort
+    mov     ecx, 3                      ; hs slot 3 = zs(bc message)
+    mov     r9, rdi
+    call    il2cpp_iface_invoke1
+    nop
+    mov     rax, r15
+    add     rax, S_WAIT_MS
+    mov     qword ptr [s_wait_until], rax
+    jmp     sk_done
+sk_abort:
+    mov     qword ptr [s_sent_item], 0
+sk_idle:
+    mov     rax, r15
+    add     rax, S_IDLE_MS
+    mov     qword ptr [s_wait_until], rax
+sk_done:
+    add     rsp, 68h
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbp
+    pop     rbx
+    ret
+stone_tick ENDP
 
 ; ---- hang so chi doc --------------------------------------------------------
 ALIGN 16

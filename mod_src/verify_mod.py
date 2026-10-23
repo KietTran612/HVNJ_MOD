@@ -106,6 +106,11 @@ def test_combinations(orig):
             check(P.detect(old)[0] == feats and P.detect_retired(old) == {"skill"}, f"nhận diện 0.3s cũ {sorted(feats)}")
             rec = P.strip_payload(old) if P.has_payload(old) else P.strip_legacy(old)
             check(sha(rec) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)} + 0.3s cũ")
+            check(not P.detect_stone_xu(out), f"mặc định luyện đá trả yên {sorted(feats)}")
+            if "stone" in feats:
+                xu = P.build(orig, feats, 3, stone_xu=True)
+                check(P.detect(xu)[0] == feats and P.detect_stone_xu(xu), f"luyện đá trả xu {sorted(feats)}")
+                check(sha(P.strip_payload(xu)) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)} + xu")
 
 
 def legacy_build(orig, feats):
@@ -173,6 +178,7 @@ FRAME_FUNCS = {
     "party_leader": (0x28, ["Rsi", "Rbx"]),
     "party_tick": (0x30, ["Rdi", "Rsi", "Rbx"]),
     "die_tick": (0x38, ["R12", "Rdi", "Rsi", "Rbx"]),
+    "stone_tick": (0x68, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbp", "Rbx"]),
 }
 
 
@@ -184,12 +190,12 @@ def func_bounds(name):
 def test_disasm(orig, out):
     print("[4] Disassemble cave và hook")
     S = P.PAYLOAD_SYMBOLS
-    code_lo, code_hi = P.PAYLOAD_CODE_RVA, P.PAYLOAD_CODE_RVA + 0x1000
-    data_lo, data_hi = P.PAYLOAD_DATA_RVA, P.PAYLOAD_DATA_RVA + 0x1000
+    code_lo, code_hi = P.PAYLOAD_CODE_RVA, P.PAYLOAD_CODE_RVA + len(P.PAYLOAD_CODE)
+    data_lo, data_hi = P.PAYLOAD_DATA_RVA, P.PAYLOAD_DATA_RVA + len(P.PAYLOAD_DATA)
     # hàm game đã biết + điểm vào các hàm có prologue riêng của mod (có unwind info riêng)
     allowed_targets = set(B.GAME_SYMBOLS.values()) | {S[n] for n in FRAME_FUNCS}
-    allowed_mem = {B.GAME_SYMBOLS[k] for k in ("ca_TypeInfo", "mb_TypeInfo", "mo_TypeInfo", "gb_TypeInfo",
-                                                "imp_GetSystemTimeAsFileTime")}
+    allowed_mem = {v for k, v in B.GAME_SYMBOLS.items() if k.endswith("_TypeInfo")} | \
+        {B.GAME_SYMBOLS["imp_GetSystemTimeAsFileTime"]}
 
     # đích nhảy về hàm game phải là đầu lệnh
     hosts = {"dgj_accept": (0x1B9C90, 0x1BA0D0), "dgj_skip": (0x1B9C90, 0x1BA0D0),
@@ -410,6 +416,15 @@ def test_cli(orig, legacy_path):
         rc, txt = run("--quest")
         on, acc, _k = P.detect(open(dll, "rb").read())
         check(rc == 0 and "quest" in on and acc == 1, f"--quest giữ accept-option: {sorted(on)} {acc}")
+        rc, txt = run("--remove", "stone")
+        rc, txt = run("--stone-pay", "xu")
+        cur = open(dll, "rb").read()
+        check(rc == 0 and "stone" in P.detect(cur)[0] and P.detect_stone_xu(cur) and "xu" in txt,
+              f"--stone-pay xu bật luyện đá trả xu: {txt}")
+        rc, txt = run("--mob")
+        check(rc == 0 and P.detect_stone_xu(open(dll, "rb").read()), "chạy lại giữ chế độ trả xu")
+        rc, txt = run("--stone-pay", "yen")
+        check(rc == 0 and not P.detect_stone_xu(open(dll, "rb").read()), "--stone-pay yen")
         rc, txt = run("--status")
         check(rc == 0 and "BẬT" in txt, "--status")
         rc, txt = run("--restore")

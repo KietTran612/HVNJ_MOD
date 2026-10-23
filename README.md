@@ -1,4 +1,4 @@
-# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (6 Tính Năng)
+# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (7 Tính Năng)
 
 [![Game Version](https://img.shields.io/badge/HVNJ-186-orange.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![Unity](https://img.shields.io/badge/Unity-2020.2.7_x64_IL2CPP-blue.svg)](https://unity.com/)
@@ -10,7 +10,7 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 ---
 
-## 🚀 6 Tính Năng
+## 🚀 7 Tính Năng
 
 > Tính năng "Tốc độ ra chiêu 0.3s" (`--skill`) **đã bị gỡ**. Xem [Thay đổi so với v1](#-thay-đổi-so-với-v1).
 
@@ -110,6 +110,31 @@ Dành cho **thành viên** trong nhóm (máy của mỗi thành viên đều c�
 
 > ⚠️ **Chưa kiểm chứng trong game:** trưởng nhóm được hiểu là **người đứng đầu danh sách nhóm**. Đó là thứ tự server gửi, và theo quy ước kiểu Ninja School thì người đầu tiên là trưởng nhóm. Thành viên chỉ đi theo được khi **cùng map** với trưởng nhóm, chưa tự tìm đường sang map khác.
 
+### 7. 💎 Tự luyện đá tại chỗ khi hành trang đầy — `--stone`
+Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod tự luyện đá ngay tại chỗ, không cần tới NPC, để Auto nhặt tiếp được đồ.
+
+**Cách game luyện đá** (popup "Luyện đá", lớp `ek`):
+- Mỗi loại đá (vật phẩm loại 26, id 0–11 = đá cấp 1–12) có một **điểm** do server gửi (`mc.nde`).
+- Bỏ 2–24 viên vào, tổng điểm quyết định cấp đá nhận được và tỉ lệ: tổng điểm **bằng đúng** điểm của một cấp thì ra đá cấp đó với tỉ lệ **100%**, thiếu thì tỉ lệ thấp hơn.
+- Phí luyện theo cấp đá nhận được (`mc.ncx`). Nút "Luyện" chỉ gửi packet chứa vị trí các viên đá trong hành trang: cmd 20 nếu trả bằng **yên**, cmd 19 nếu trả bằng **xu**.
+
+**Mod làm gì** (kiểm tra mỗi giây):
+
+| Bước | Chi tiết |
+|---|---|
+| Chọn đá | Tìm nhóm đá có tổng điểm **bằng đúng** điểm của một cấp cao hơn, nên **chỉ luyện khi chắc chắn 100%** và không mất đá. Ưu tiên cấp thấp nhất, ví dụ 4 viên cấp 1 thành 1 viên cấp 2. Tối đa 24 viên. |
+| Kiểm tra tiền | Đủ phí mới gửi lệnh. |
+| Gửi lệnh | Gửi packet giống nút "Luyện" của game, nhưng không mở hộp thoại. Mỗi lần chỉ luyện một nhóm, rồi chờ 3 giây cho server cập nhật hành trang. |
+| Không có cách luyện 100% hoặc không đủ tiền | Không làm gì, 30 giây sau xét lại. |
+| Server không xử lý | Gửi 2 lần mà hành trang không đổi (ví dụ server đòi phải đứng gần NPC) thì nghỉ 5 phút rồi mới thử lại, không spam. |
+
+- **Trả phí:** mặc định bằng **yên**: nếu thiếu yên thì server lấy thêm xu, và đá nhận được **bị khóa**, giống nút luyện bằng yên của game.
+- Dùng `--stone-pay xu` để trả bằng **xu**. Khi đó mod chỉ gộp đá cùng trạng thái khóa, nên đá không khóa luyện ra vẫn không khóa.
+- Không đụng tới đá đang được chọn trong popup Luyện đá. Khi popup đang mở thì mod không chạy.
+- Không chạy khi chết hoặc khi Auto tắt.
+
+> ⚠️ **Chưa kiểm chứng trong game:** client cho mở popup Luyện đá ở bất cứ đâu bằng vật phẩm id 729 trong hành trang. Popup đó gửi cùng packet mà mod gửi, nên chắc chắn chạy khi có vật phẩm này. Không có vật phẩm 729 thì server **có thể** bắt phải đứng gần NPC. Khi đó mod tự nghỉ như mô tả ở bảng trên.
+
 ---
 
 ## 🛠️ Cách dùng
@@ -118,8 +143,10 @@ Cần Python 3.8+ (chỉ dùng thư viện chuẩn). Chạy trong thư mục gam
 
 ```bash
 python patch_skill_delay.py --status          # xem trạng thái
-python patch_skill_delay.py --all             # bật cả 6 tính năng
+python patch_skill_delay.py --all             # bật cả 7 tính năng
 python patch_skill_delay.py --party           # chỉ thêm đánh theo nhóm (máy thành viên)
+python patch_skill_delay.py --stone           # thêm tự luyện đá (trả yên)
+python patch_skill_delay.py --stone-pay xu    # luyện đá trả bằng xu (đá không khóa vẫn không khóa)
 python patch_skill_delay.py --mob --stage     # bật thêm tính năng (giữ các tính năng đang bật)
 python patch_skill_delay.py --remove quest    # tắt một tính năng
 python patch_skill_delay.py --accept-option 1 # đổi option nhận nhiệm vụ
@@ -131,7 +158,7 @@ python patch_skill_delay.py --restore         # trả về bản gốc
 - Nếu game cập nhật lên phiên bản khác (SHA-256 không khớp), script từ chối patch để tránh làm hỏng DLL.
 - DLL cũ còn patch "0.3s" sẽ được gỡ patch đó ở lần chạy script kế tiếp (`--status` có cảnh báo).
 
-Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 6 tính năng) vào thư mục game.
+Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 7 tính năng, luyện đá trả yên) vào thư mục game.
 
 ---
 
@@ -150,7 +177,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 ```
 
 `verify_mod.py` kiểm tra các mục sau:
-- dựng lại đủ 64 tổ hợp tính năng và khôi phục được bản gốc;
+- dựng lại đủ 128 tổ hợp tính năng (cả 2 kiểu trả phí luyện đá) và khôi phục được bản gốc;
 - gỡ được patch "0.3s" khỏi DLL cũ;
 - nâng cấp DLL v2 dựng bằng payload cũ (`--old-v2`) mà vẫn giữ tính năng;
 - nâng cấp được từ v1;
@@ -167,7 +194,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
 | `0x1BA485` | `mo.dgl` | lọc quái của auto nhiệm vụ |
 | `0x24B5AC` | `lm.clo` | chọn mục tiêu: theo trưởng nhóm, tự qua ải Thí Luyện |
-| `0x19495E` | `mo.ctq` | mỗi frame: chết - quay về, đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
+| `0x19495E` | `mo.ctq` | mỗi frame: luyện đá, chết - quay về, đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
 | `0x1927E2`, `0x192912`, `0x3612E0`, `0x360946` | `mo.ctq`, `hw.cdy`, `hw.cdq` | bỏ đếm ngược khi chết |
 | `0x19C061`, `0x477CBF` | `mo.dek`, `eq.bld` | Auto và tìm đường trong map 161 |
 

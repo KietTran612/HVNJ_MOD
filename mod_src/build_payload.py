@@ -41,11 +41,24 @@ GAME_SYMBOLS = {
     "lj_cmy": 0x237B00,
     "lj_menu": 0x2436E0,
     "ht_cbt": 0x352F20,
+    "bc_ctor": 0x439150,
+    "bl_bat": 0x2FC880,
+    "il2cpp_init_md": 0x157800,
+    "il2cpp_class_init": 0x0DC4D0,
+    "il2cpp_object_new": 0x157910,
+    "il2cpp_array_new": 0x157400,
+    "il2cpp_iface_invoke1": 0x002CE0,
     "imp_GetSystemTimeAsFileTime": 0xBC1210,
     "ca_TypeInfo": 0xE59F00,
     "mb_TypeInfo": 0xE5C0E8,
     "mo_TypeInfo": 0xE5C158,
     "gb_TypeInfo": 0xE5A718,
+    "mc_TypeInfo": 0xE5C120,
+    "hw_TypeInfo": 0xE5AC58,
+    "ek_TypeInfo": 0xE5A2F0,
+    "jr_array_TypeInfo": 0xE45418,
+    "bc_TypeInfo": 0xE59E20,
+    "hs_TypeInfo": 0xE5ABE8,
     "dgj_accept": 0x1B9F2F,
     "dgj_skip": 0x1BA07E,
     "dgj_epilogue_tail": 0x1BA08C,
@@ -65,7 +78,7 @@ HOOK_USERS = {
     "core": ["mob", "stage"],
     "mob": ["mob"],
     "clo": ["stage", "party"],
-    "tick": ["quest", "party", "die"],
+    "tick": ["quest", "party", "die", "stone"],
 }
 
 SECTION_ALIGN = 0x1000
@@ -337,7 +350,7 @@ def build(original_path, ml64):
             (0x24B5AC, "E8DFE6F6FFE9B9FCFFFF", "E9" + rel32(0x24B5B1, S["clo_stage"]).hex() + "CC" * 5),
         ],
         "tick": [
-            # mo.ctq: gọi mỗi frame (chết - quay về, đánh theo nhóm, auto nhiệm vụ ngày)
+            # mo.ctq: gọi mỗi frame (luyện đá, chết - quay về, đánh theo nhóm, auto nhiệm vụ ngày)
             (0x19495E, "E84D0D0200", "E8" + rel32(0x194963, S["quest_tick"]).hex()),
         ],
     }
@@ -351,7 +364,7 @@ def build(original_path, ml64):
 
     data_base = layout[data_idx[0]]
     cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party",
-                                         "cfg_die")}
+                                         "cfg_die", "cfg_stone", "cfg_stone_xu")}
     return dict(
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),
