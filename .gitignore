@@ -1,4 +1,4 @@
-# Large archives and binaries (> 100 MB)
+# Large archives & binaries
 *.zip
 tools/
 
@@ -9,7 +9,7 @@ __pycache__/
 *.pyc
 .system_generated/
 
-# Proprietary Unity game assets (textures, audio, level data)
+# Large proprietary Unity game assets (> 100 MB)
 Hoc Vien Ninja_Data/
 HVNJ_186_Mod_0.3s/
 UnityCrashHandler64.exe
