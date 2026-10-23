@@ -63,6 +63,8 @@ GAME_SYMBOLS = {
     "dgj_skip": 0x1BA07E,
     "dgj_epilogue_tail": 0x1BA08C,
     "clo_store": 0x24B26F,
+    "dgl_accept": 0x1BA4AB,
+    "dgl_skip": 0x1BA5FD,
 }
 
 # Khoi cave chay ben trong frame cua ham game -> unwind info chained toi
@@ -71,6 +73,7 @@ CHAINED_BLOCKS = [
     ("dgj_ret", "dgj_ret_end", 0x1B9DFC),
     ("dgj_filter", "dgj_filter_end", 0x1B9F11),
     ("clo_stage", "clo_stage_end", 0x24B5AC),
+    ("dgl_filter", "dgl_filter_end", 0x1BA48E),
 ]
 
 # Nhóm hook -> các tính năng cần nhóm đó (patcher cài nhóm nếu bật ít nhất 1 tính năng).
@@ -78,7 +81,7 @@ HOOK_USERS = {
     "core": ["mob", "stage"],
     "mob": ["mob"],
     "clo": ["stage", "party"],
-    "tick": ["quest", "party", "die", "stone"],
+    "tick": ["quest", "party", "die", "stone", "tathu"],
 }
 
 SECTION_ALIGN = 0x1000
@@ -341,9 +344,9 @@ def build(original_path, ml64):
              "E9" + rel32(0x1B9F16, S["dgj_filter"]).hex() + "CC" * 25),
         ],
         "mob": [
-            # mo.dgl (auto nhiem vu): bo qua tinh anh/thu linh/boss
+            # mo.dgl (auto nhiem vu): bo qua tinh anh/thu linh/boss, tru con ta thu cua nhiem vu ta thu
             (0x1BA485, "3968440F846F010000488B0D931ACA00F6813301000002740D39A9E00000007505E825" + "20F2FF",
-             "3968440F846F01000066" + "83B8B0000000000F856101000080B8B4000000000F85540100009090"),
+             "3968440F846F010000" + "E9" + rel32(0x1BA493, S["dgl_filter"]).hex() + "CC" * 24),
         ],
         "clo": [
             # lm.clo: chọn mục tiêu auto (đánh theo nhóm, tự qua ải Thí Luyện)
@@ -364,7 +367,8 @@ def build(original_path, ml64):
 
     data_base = layout[data_idx[0]]
     cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party",
-                                         "cfg_die", "cfg_stone", "cfg_stone_xu", "cfg_stone_lo", "cfg_stone_hi")}
+                                         "cfg_die", "cfg_stone", "cfg_stone_xu", "cfg_stone_lo", "cfg_stone_hi",
+                                         "cfg_tathu")}
     return dict(
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),

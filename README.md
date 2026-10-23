@@ -1,4 +1,4 @@
-# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (7 Tính Năng)
+# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (8 Tính Năng)
 
 [![Game Version](https://img.shields.io/badge/HVNJ-186-orange.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![Unity](https://img.shields.io/badge/Unity-2020.2.7_x64_IL2CPP-blue.svg)](https://unity.com/)
@@ -10,13 +10,14 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 ---
 
-## 🚀 7 Tính Năng
+## 🚀 8 Tính Năng
 
 > Tính năng "Tốc độ ra chiêu 0.3s" (`--skill`) **đã bị gỡ**. Xem [Thay đổi so với v1](#-thay-đổi-so-với-v1).
 
 ### 1. 🛡️ Né quái Tinh Anh / Thủ Lĩnh / Boss khi Auto — `--mob`
 - Auto thường (`mo.dgj`) chọn **quái thường gần nhất**. Quái Tinh Anh (`levelBoss == 1`), Thủ Lĩnh (`levelBoss == 2`) và Boss (`isBos`) bị bỏ qua.
 - Auto nhiệm vụ (`mo.dgl`) cũng bỏ qua các loại quái trên.
+- **Ngoại lệ:** con tà thú của nhiệm vụ tà thú đang nhận (`la.mad = 1`, template = `la.maj`) vẫn được đánh, vì tà thú là boss. Bản trước sửa thẳng byte trong `mo.dgl` nên chặn luôn tà thú, kể cả khi bấm auto nhiệm vụ của game.
 
 ### 2. ⏱️ Chết: về làng ngay, quay lại map cũ, bật lại Auto — `--die`
 Áp dụng khi nhân vật chết **lúc đang bật Auto**.
@@ -146,6 +147,32 @@ Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod b�
 > - Client cho mở popup Luyện đá ở bất cứ đâu bằng vật phẩm id 729 trong hành trang. Popup đó gửi cùng packet mà mod gửi, nên chắc chắn chạy khi có vật phẩm này. Không có vật phẩm 729 thì server **có thể** bắt phải đứng gần NPC. Khi đó mod tự nghỉ như mô tả ở bảng trên.
 > - Cất đá vào rương từ xa: client gửi lệnh chuyển đồ vào rương mà không kèm điều kiện gì, nhưng server có thể chỉ cho chuyển khi đang mở rương ở NPC.
 
+### 8. 🐉 Auto nhiệm vụ tà thú — `--tathu`
+Giống `--quest`, mod dùng lại pipeline "tự động làm nhiệm vụ" có sẵn của game, vốn đã xử lý cả tà thú (`la.mad = 1`).
+
+**Game có sẵn** (`mo.dga` → `mo.dgh`, `mo.dgd`):
+- **Đi:** tự tìm đường tới map tà thú (`la.mak`). Khác nhiệm vụ ngày, game không dùng NPC dịch chuyển.
+- **Đánh:** tìm con tà thú (template `la.maj`). Có thì bật Auto đánh nó, chưa có thì báo "Tà thú chưa xuất hiện".
+- **Trả:** giết đủ thì về NPC 25 và gửi `menu(25, 1, 2)`. Vậy **menu 1** của NPC 25 là menu tà thú (nhiệm vụ ngày dùng menu 0).
+- **Nhận:** game không tự nhận nhiệm vụ.
+
+**Mod làm thêm** (chung vòng lặp với `--quest`, bắt đầu khi bật Auto ngoài Thí Luyện):
+
+| Tình huống | Mod làm gì |
+|---|---|
+| Chưa có nhiệm vụ tà thú | Về trường theo hệ phái, tới NPC 25, gửi `menu(25, 1, N)` để **nhận**. N dùng chung với `--accept-option`, mặc định 0. Bật cùng `--quest` thì nhận và làm nhiệm vụ ngày trước. Nhận nhiệm vụ ngày 4 lần không được (hết lượt) thì chuyển sang tà thú. |
+| Có nhiệm vụ, chưa ở map tà thú | Gọi pipeline của game để nó tự tìm đường tới map. |
+| Ở map tà thú, tà thú chưa xuất hiện | Để Auto đánh quái thường, **cứ 15 giây gọi lại pipeline**. Khi tà thú xuất hiện, game tự chuyển sang đánh nó. Không bỏ cuộc sau 3 lần như nhiệm vụ ngày. |
+| Đã giết tà thú | Game tự về NPC 25 trả nhiệm vụ. Mod tiếp tục nhận lượt kế tiếp. |
+
+**Dừng khi:**
+- tắt Auto lúc đang ở map tà thú;
+- nhận 4 lần không được;
+- kẹt nhiều lần khi đi đường;
+- nhân vật chưa vào lớp.
+
+> ⚠️ **Chưa kiểm chứng trong game:** option **nhận** trong menu tà thú = 0 là suy luận, giống nhiệm vụ ngày. Menu 1 và option 2 (trả) lấy từ code game nên chắc chắn. Nếu nhận không được, thử `--accept-option 1`. Lưu ý tuỳ chọn này đổi cả option nhận nhiệm vụ ngày.
+
 ---
 
 ## 🛠️ Cách dùng
@@ -154,8 +181,9 @@ Cần Python 3.8+ (chỉ dùng thư viện chuẩn). Chạy trong thư mục gam
 
 ```bash
 python patch_skill_delay.py --status          # xem trạng thái
-python patch_skill_delay.py --all             # bật cả 7 tính năng
+python patch_skill_delay.py --all             # bật cả 8 tính năng
 python patch_skill_delay.py --party           # chỉ thêm đánh theo nhóm (máy thành viên)
+python patch_skill_delay.py --tathu           # thêm auto nhiệm vụ tà thú
 python patch_skill_delay.py --stone           # thêm tự luyện đá (trả yên)
 python patch_skill_delay.py --stone-pay xu    # luyện đá trả bằng xu (đá không khóa vẫn không khóa)
 python patch_skill_delay.py --stone-levels 6   # nâng dần đá lên cấp 6, cất đá cấp 6 vào rương; all = mọi cấp
@@ -170,7 +198,7 @@ python patch_skill_delay.py --restore         # trả về bản gốc
 - Nếu game cập nhật lên phiên bản khác (SHA-256 không khớp), script từ chối patch để tránh làm hỏng DLL.
 - DLL cũ còn patch "0.3s" sẽ được gỡ patch đó ở lần chạy script kế tiếp (`--status` có cảnh báo).
 
-Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 7 tính năng, luyện đá trả yên) vào thư mục game.
+Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 8 tính năng, luyện đá trả yên) vào thư mục game.
 
 ---
 
@@ -189,11 +217,12 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 ```
 
 `verify_mod.py` kiểm tra các mục sau:
-- dựng lại đủ 128 tổ hợp tính năng (cả 2 kiểu trả phí và giới hạn cấp đá) và khôi phục được bản gốc;
+- dựng lại đủ 256 tổ hợp tính năng (cả 2 kiểu trả phí và giới hạn cấp đá) và khôi phục được bản gốc;
 - **chạy thật mã máy luyện đá** (`stone_tick`) trong DLL đã nạp:
   - các hàm game được thay bằng callback Python;
   - nhân vật, hành trang và bảng điểm đá là dữ liệu giả;
   - kiểm tra packet gửi ra ở 24 tình huống: chọn đá, chờ/gửi lại/nghỉ, đủ hay thiếu phí, đá khóa khi trả xu, leo cấp tới cấp đích rồi cất rương, rương chưa nạp/đầy/bị từ chối, gộp nhiều cấp, giới hạn 24 viên;
+- **chạy thật mã máy auto nhiệm vụ** (`quest_tick`) với NPC, map và nhiệm vụ giả, ở 9 tình huống: thứ tự nhận (ngày → tà thú), menu nhận tà thú, ưu tiên nhiệm vụ ngày, chờ tà thú xuất hiện, tắt Auto thì dừng;
 - gỡ được patch "0.3s" khỏi DLL cũ;
 - nâng cấp DLL v2 dựng bằng payload cũ (`--old-v2`) mà vẫn giữ tính năng;
 - nâng cấp được từ v1;
@@ -208,7 +237,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x1B9DB1`, `0x1B9E4B` | `mo.dgj` | bỏ ràng buộc quái theo nhiệm vụ chính |
 | `0x1B9DFC` | `mo.dgj` | trả về quái gần nhất thay vì `null` |
 | `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
-| `0x1BA485` | `mo.dgl` | lọc quái của auto nhiệm vụ |
+| `0x1BA48E` | `mo.dgl` | lọc quái của auto nhiệm vụ (trừ con tà thú của nhiệm vụ tà thú) |
 | `0x24B5AC` | `lm.clo` | chọn mục tiêu: theo trưởng nhóm, tự qua ải Thí Luyện |
 | `0x19495E` | `mo.ctq` | mỗi frame: luyện đá, chết - quay về, đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
 | `0x1927E2`, `0x192912`, `0x3612E0`, `0x360946` | `mo.ctq`, `hw.cdy`, `hw.cdq` | bỏ đếm ngược khi chết |

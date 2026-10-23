@@ -60,11 +60,13 @@ EXTERN dgj_accept:PROC          ; mo.dgj: tiep tuc xet con quai (tinh khoang cac
 EXTERN dgj_skip:PROC            ; mo.dgj: bo qua con quai nay (inc ebx; vong lap)
 EXTERN dgj_epilogue_tail:PROC   ; mo.dgj: epilogue, ngay sau "xor eax, eax"
 EXTERN clo_store:PROC           ; lm.clo: "mov [rbx+200h], rax" roi return
+EXTERN dgl_accept:PROC          ; mo.dgl: quai hop le -> tinh khoang cach
+EXTERN dgl_skip:PROC            ; mo.dgl: bo qua quai nay (inc edi; vong lap)
 
-PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end
+PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end, dgl_filter, dgl_filter_end
 PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick
 PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone, cfg_stone_xu
-PUBLIC cfg_stone_lo, cfg_stone_hi
+PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
 STATICS         EQU 0B8h        ; Il2CppClass::static_fields
@@ -82,7 +84,11 @@ MT_ISBOSS       EQU 0B4h        ; mt.nvy (bool): boss
 LA_TASKID       EQU 10h         ; la.mad: 0 = nhiem vu hang ngay
 LA_COUNT        EQU 14h         ; la.mae
 LA_MAX          EQU 18h         ; la.maf
+LA_KILLID       EQU 38h         ; la.maj: template quai can giet
 LA_MAP          EQU 3Ch         ; la.mak
+MT_TEMPLATE     EQU 78h         ; mt: template id (mo.dgl so voi la.maj)
+TASK_DAILY      EQU 0           ; la.mad: nhiem vu hang ngay (NPC 25 menu 0)
+TASK_TATHU      EQU 1           ; la.mad: nhiem vu ta thu (NPC 25 menu 1, xem mo.dgd)
 LM_XU           EQU 140h        ; lm.mie (long)
 LM_YEN          EQU 150h        ; lm.mig (long)
 LM_BAG          EQU 1B8h        ; lm.miv: jr[] hanh trang
@@ -118,6 +124,7 @@ Q_MAX_NAV       EQU 6           ; 6 lan (~60s) khong ve duoc truong -> dung
 Q_WALK_MS       EQU 2000        ; lenh di bo toi NPC toi da moi 2s
 Q_ACCEPT_MS     EQU 4000        ; gui lenh nhan nhiem vu toi da moi 4s
 Q_MAX_ACCEPT    EQU 4           ; 4 lan nhan khong duoc -> het luot / dung
+T_KICK_MS       EQU 15000       ; dang o map ta thu: goi lai pipeline moi 15s de bat ta thu khi no xuat hien
 P_TICK_MS       EQU 100         ; nhip xu ly danh theo nhom
 P_MOVE_MS       EQU 500         ; lap lai lenh chay theo truong nhom toi da moi 0.5s
 EQ_RETURNING    EQU 0FCh        ; eq.hcr: game dang tu ve lang / tu quay lai map
@@ -156,7 +163,7 @@ cfg_stone       DB 0            ; 1 = tu luyen da tai cho khi hanh trang day (lu
 cfg_stone_xu    DB 0            ; 1 = tra phi luyen bang xu, 0 = bang yen
 cfg_stone_lo    DB 0            ; --stone-levels A-B: dung da tu cap A, luyen len toi cap B
 cfg_stone_hi    DB 0            ;   (da cap B cat vao ruong); 0 = moi cap, khong cat ruong
-                DB 1 DUP (0)
+cfg_tathu       DB 0            ; 1 = auto nhiem vu ta thu (cung vong lap voi auto nhiem vu ngay)
 ALIGN 8
 st_map          DD 0
 st_party_map    DD -1           ; map co truong nhom o lan cuoi thay (danh theo nhom)
@@ -175,7 +182,10 @@ q_accept_tries  DB 0
 q_kicks         DB 0
 q_nav_tries     DB 0
 p_active        DB 0
-                DB 6 DUP (0)
+q_kind          DB 0            ; loai nhiem vu dang di nhan: TASK_DAILY / TASK_TATHU
+q_done_daily    DB 0            ; 1 = nhan nhiem vu ngay khong duoc nua (het luot) trong lan bat Auto nay
+q_done_tathu    DB 0
+                DB 3 DUP (0)
 p_last_tick     DQ 0
 p_last_move     DQ 0
 r_last_tick     DQ 0
@@ -202,6 +212,47 @@ s_idx           DB S_MAX_STONES DUP (0)  ; indexUI cac vien se luyen
 _DATA ENDS
 
 _TEXT SEGMENT ALIGN(16)
+
+; -----------------------------------------------------------------------------
+; rax = mt. Nhay toi "yes" neu template cua con quai la con can giet cua mot
+; nhiem vu ta thu dang nhan (la.mad = TASK_TATHU trong mo.nfl). Con ta thu la
+; boss nen --mob khong duoc ne no. Chi dung rcx, rdx, r8-r10 (ca hai cho goi
+; deu da het gia tri trong cac thanh ghi volatile).
+; -----------------------------------------------------------------------------
+TATHU_TARGET MACRO yes
+    LOCAL tt_loop, tt_next, tt_no
+    mov     rcx, qword ptr [mo_TypeInfo]
+    test    rcx, rcx
+    jz      tt_no
+    mov     rcx, qword ptr [rcx+STATICS]
+    test    rcx, rcx
+    jz      tt_no
+    mov     rcx, qword ptr [rcx+80h]    ; mo.nfl: List<la>
+    test    rcx, rcx
+    jz      tt_no
+    mov     r8d, dword ptr [rcx+18h]
+    mov     rcx, qword ptr [rcx+10h]
+    test    rcx, rcx
+    jz      tt_no
+    mov     r9d, dword ptr [rax+MT_TEMPLATE]
+    xor     edx, edx
+tt_loop:
+    cmp     edx, r8d
+    jge     tt_no
+    cmp     edx, dword ptr [rcx+18h]
+    jae     tt_no
+    mov     r10, qword ptr [rcx+rdx*8+20h]
+    test    r10, r10
+    jz      tt_next
+    cmp     dword ptr [r10+LA_TASKID], TASK_TATHU
+    jne     tt_next
+    cmp     dword ptr [r10+LA_KILLID], r9d
+    je      yes
+tt_next:
+    inc     edx
+    jmp     tt_loop
+tt_no:
+ENDM
 
 ; -----------------------------------------------------------------------------
 ; mo.dgj: ket thuc vong lap -> tra ve con quai tot nhat (r14) thay vi null.
@@ -238,12 +289,31 @@ no_trial:
     cmp     byte ptr [cfg_mob], 0
     je      dgj_accept
     cmp     word ptr [rax+MT_LEVELBOSS], 0
-    jne     dgj_skip
+    jne     dgj_boss
     cmp     byte ptr [rax+MT_ISBOSS], 0
-    jne     dgj_skip
-    jmp     dgj_accept
+    je      dgj_accept
+dgj_boss:
+    TATHU_TARGET dgj_accept             ; con ta thu cua nhiem vu thi van danh
+    jmp     dgj_skip
 dgj_filter ENDP
 dgj_filter_end LABEL NEAR
+
+; -----------------------------------------------------------------------------
+; mo.dgl (chon quai cho auto nhiem vu, cai cung --mob): thay cho doan kiem tra
+; class init ngay sau "cmp [rax+44h], ebp / je". rax = mt cung template voi
+; la.maj. Ne tinh anh / thu linh / boss, TRU con ta thu cua nhiem vu ta thu.
+; -----------------------------------------------------------------------------
+ALIGN 16
+dgl_filter PROC
+    cmp     word ptr [rax+MT_LEVELBOSS], 0
+    jne     dgl_boss
+    cmp     byte ptr [rax+MT_ISBOSS], 0
+    je      dgl_accept
+dgl_boss:
+    TATHU_TARGET dgl_accept
+    jmp     dgl_skip
+dgl_filter ENDP
+dgl_filter_end LABEL NEAR
 
 ; -----------------------------------------------------------------------------
 ; lm.clo: thay cho "call mo.dgj ; jmp 24B26F". rbx = lm (nhan vat).
@@ -425,6 +495,11 @@ clo_stage_end LABEL NEAR
 ;     Game tu dich chuyen bang NPC (option 3), tu danh, tu ve tra (option 2).
 ;   - Dung khi: tat Auto luc dang danh trong map nhiem vu, het luot nhan,
 ;     pipeline ket nhieu lan, nhan vat chua vao lop.
+; --tathu: nhiem vu ta thu (la.mad = 1) di cung pipeline. Nhan bang
+;   menu(25, 1, cfg_accept) (game tra bang menu(25, 1, 2) trong mo.dgd), lam
+;   sau nhiem vu ngay. Game tu tim duong toi map (khong dich chuyen). O map ma
+;   ta thu chua xuat hien thi Auto danh quai thuong, cu T_KICK_MS goi lai
+;   pipeline de no bat ta thu khi xuat hien (khong tinh vao Q_MAX_KICKS).
 ; -----------------------------------------------------------------------------
 ALIGN 16
 quest_tick PROC FRAME
@@ -446,7 +521,7 @@ quest_tick PROC FRAME
     .allocstack 40h
     .endprolog
     ; [rsp+20h] tham so thu 5 | [rsp+28h] npc x | [rsp+2Ch] npc y
-    ; [rsp+30h] FILETIME      | [rsp+38h] trang thai Auto lan truoc
+    ; [rsp+30h] FILETIME      | [rsp+38h] trang thai Auto lan truoc | [rsp+3Ch] vi tri nhiem vu ta thu
     mov     rbx, rcx
     xor     edx, edx
     call    mo_dgd                      ; giu nguyen hanh vi goc
@@ -468,7 +543,10 @@ q_no_die:
     jnz     q_resync_auto               ; dang di theo truong nhom -> tam dung auto nhiem vu
 q_no_party:
     cmp     byte ptr [cfg_quest], 0
+    jne     q_on
+    cmp     byte ptr [cfg_tathu], 0
     je      q_exit
+q_on:
 
     lea     rcx, [rsp+30h]
     call    qword ptr [imp_GetSystemTimeAsFileTime]
@@ -515,6 +593,8 @@ q_no_party:
     mov     byte ptr [q_accept_tries], 0
     mov     byte ptr [q_kicks], 0
     mov     byte ptr [q_nav_tries], 0
+    mov     byte ptr [q_done_daily], 0
+    mov     byte ptr [q_done_tathu], 0
     mov     qword ptr [q_last_task], 0
 q_engaged_ok:
     xor     ecx, ecx
@@ -528,7 +608,8 @@ q_engaged_ok:
     cmp     eax, STATUS_DEADFLY
     je      q_exit
 
-    ; ---- tim nhiem vu hang ngay (la.mad == 0) trong mo.nfl ----
+    ; ---- tim nhiem vu trong mo.nfl: nhiem vu ngay (--quest) truoc, roi ta thu (--tathu) ----
+    xor     esi, esi                    ; rsi = nhiem vu ta thu tim thay, [rsp+3Ch] = vi tri
     mov     rax, qword ptr [mo_TypeInfo]
     test    rax, rax
     jz      q_exit
@@ -545,17 +626,35 @@ q_engaged_ok:
     xor     edi, edi
 q_find:
     cmp     edi, ecx
-    jge     q_no_task
+    jge     q_find_end
     cmp     edi, dword ptr [rdx+18h]
-    jae     q_no_task
+    jae     q_find_end
     mov     rax, qword ptr [rdx+rdi*8+20h]
     test    rax, rax
     jz      q_find_next
-    cmp     dword ptr [rax+LA_TASKID], 0
-    je      q_have_task
+    mov     r8d, dword ptr [rax+LA_TASKID]
+    cmp     r8d, TASK_DAILY
+    jne     q_find_tathu
+    cmp     byte ptr [cfg_quest], 0
+    jne     q_have_task
+    jmp     q_find_next
+q_find_tathu:
+    cmp     r8d, TASK_TATHU
+    jne     q_find_next
+    cmp     byte ptr [cfg_tathu], 0
+    je      q_find_next
+    test    rsi, rsi
+    jnz     q_find_next
+    mov     rsi, rax
+    mov     dword ptr [rsp+3Ch], edi
 q_find_next:
     inc     edi
     jmp     q_find
+q_find_end:
+    test    rsi, rsi
+    jz      q_no_task
+    mov     rax, rsi
+    mov     edi, dword ptr [rsp+3Ch]
 
     ; ---- da co nhiem vu: dua cho pipeline cua game ----
 q_have_task:
@@ -582,6 +681,8 @@ q_no_progress:
 q_not_done:
     cmp     r13d, dword ptr [rsi+LA_MAP]
     jne     q_kick                      ; chua o map nhiem vu -> di
+    cmp     dword ptr [rsi+LA_TASKID], TASK_TATHU
+    je      q_tathu_wait
     test    r12d, r12d
     jnz     q_exit                      ; dang Auto danh quai nhiem vu
     cmp     byte ptr [rsp+38h], 0
@@ -595,6 +696,24 @@ q_kick:
     jae     q_disengage
     inc     byte ptr [q_kicks]
     mov     qword ptr [q_last_kick], r15
+    jmp     q_call_dga
+
+    ; ---- o map ta thu: ta thu co the chua xuat hien. Goi lai pipeline moi
+    ; T_KICK_MS (game tu tim con ta thu, thay thi bat Auto danh no), khong tinh
+    ; vao Q_MAX_KICKS de cho duoc lau ----
+q_tathu_wait:
+    test    r12d, r12d
+    jnz     q_tathu_kick
+    cmp     byte ptr [rsp+38h], 0
+    jne     q_disengage                 ; nguoi choi vua tat Auto -> dung
+q_tathu_kick:
+    mov     rax, r15
+    sub     rax, qword ptr [q_last_kick]
+    cmp     rax, T_KICK_MS
+    jb      q_exit
+    mov     qword ptr [q_last_kick], r15
+    mov     byte ptr [q_kicks], 0
+q_call_dga:
     mov     rcx, rbx
     lea     edx, [rdi+2]                ; index tren UI = vi tri + 2 (bat co 1A3h)
     mov     r8, rsi
@@ -606,6 +725,24 @@ q_kick:
     ; ---- chua co nhiem vu: ve truong nhan ----
 q_no_task:
     mov     qword ptr [q_last_task], 0
+    ; chon loai can nhan: nhiem vu ngay truoc, nhan het luot thi sang ta thu
+    xor     eax, eax
+    cmp     byte ptr [cfg_quest], 0
+    je      q_pick_tathu
+    cmp     byte ptr [q_done_daily], 0
+    je      q_kind_ok
+q_pick_tathu:
+    mov     eax, TASK_TATHU
+    cmp     byte ptr [cfg_tathu], 0
+    je      q_disengage
+    cmp     byte ptr [q_done_tathu], 0
+    jne     q_disengage
+q_kind_ok:
+    cmp     al, byte ptr [q_kind]
+    je      q_kind_same
+    mov     byte ptr [q_kind], al
+    mov     byte ptr [q_accept_tries], 0
+q_kind_same:
     movsx   eax, byte ptr [r14+LM_CLASS]
     dec     eax
     cmp     eax, 7
@@ -678,7 +815,7 @@ q_near:
     cmp     rax, Q_ACCEPT_MS
     jb      q_exit
     cmp     byte ptr [q_accept_tries], Q_MAX_ACCEPT
-    jae     q_disengage                 ; het luot nhiem vu trong ngay
+    jae     q_kind_exhausted            ; het luot loai nhiem vu nay trong ngay
     inc     byte ptr [q_accept_tries]
     mov     qword ptr [q_last_accept], r15
     xor     ecx, ecx
@@ -687,11 +824,20 @@ q_near:
     jz      q_exit
     mov     rcx, rax
     mov     edx, NPC_TEACHER
-    xor     r8d, r8d
+    movzx   r8d, byte ptr [q_kind]      ; menu 0 = nhiem vu ngay, menu 1 = ta thu
     movzx   r9d, byte ptr [cfg_accept]
     mov     qword ptr [rsp+20h], 0
     call    lj_menu
     nop
+    jmp     q_exit
+q_kind_exhausted:
+    mov     byte ptr [q_accept_tries], 0
+    cmp     byte ptr [q_kind], TASK_DAILY
+    jne     q_tathu_exhausted
+    mov     byte ptr [q_done_daily], 1  ; lan sau chuyen sang nhan ta thu (neu bat --tathu)
+    jmp     q_exit
+q_tathu_exhausted:
+    mov     byte ptr [q_done_tathu], 1
     jmp     q_exit
 
 q_disengage:

@@ -14,8 +14,9 @@
    quả như unwind tại vị trí hook gốc.
 6. Chạy THẬT mã máy stone_tick (luyện đá) với hàm game thay bằng callback Python và
    nhân vật / hành trang / bảng điểm đá giả: kiểm tra packet gửi ra ở từng tình huống.
-7. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, thêm/bớt, restore.
-8. (--old-v2) Nâng cấp DLL v2 dựng bằng payload cũ hơn.
+7. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
+8. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, thêm/bớt, restore.
+9. (--old-v2) Nâng cấp DLL v2 dựng bằng payload cũ hơn.
 """
 import argparse
 import ctypes
@@ -205,12 +206,13 @@ def test_disasm(orig, out):
 
     # đích nhảy về hàm game phải là đầu lệnh
     hosts = {"dgj_accept": (0x1B9C90, 0x1BA0D0), "dgj_skip": (0x1B9C90, 0x1BA0D0),
-             "dgj_epilogue_tail": (0x1B9C90, 0x1BA0D0), "clo_store": (0x24AC30, 0x24B5D0)}
+             "dgj_epilogue_tail": (0x1B9C90, 0x1BA0D0), "clo_store": (0x24AC30, 0x24B5D0),
+             "dgl_accept": (0x1BA2D0, 0x1BADE0), "dgl_skip": (0x1BA2D0, 0x1BADE0)}
     for name, (a, b) in hosts.items():
         check(B.GAME_SYMBOLS[name] in insn_starts(orig, a, b), f"{name} không phải đầu lệnh")
     check(disasm(orig, 0x1BA085, 0x10)[1].mnemonic == "xor", "1BA08A phải là xor eax,eax")
 
-    blocks = [(n, S[n], S[n + "_end"], True) for n in ("dgj_ret", "dgj_filter", "clo_stage")]
+    blocks = [(n, S[n], S[n + "_end"], True) for n in ("dgj_ret", "dgj_filter", "clo_stage", "dgl_filter")]
     blocks += [(n, *func_bounds(n), False) for n in FRAME_FUNCS]
     check(len(blocks) == len(P.PAYLOAD_PDATA), "mỗi khối code phải có đúng một entry .pdata")
     for start, lo, hi, in_host in blocks:
@@ -240,6 +242,7 @@ def test_disasm(orig, out):
     expect = {
         0x1B9DFC: ("jge", S["dgj_ret"]), 0x1B9E4B: ("jmp", 0x1B9EB4), 0x1B9F11: ("jmp", S["dgj_filter"]),
         0x24B5AC: ("jmp", S["clo_stage"]), 0x19495E: ("call", S["quest_tick"]),
+        0x1BA48E: ("jmp", S["dgl_filter"]),
     }
     for rva, (mn, tgt) in expect.items():
         ins = disasm(out, rva, 8)[0]
@@ -252,6 +255,11 @@ def test_disasm(orig, out):
             t = ins.operands[0].imm
             check(not (0x1B9F16 <= t < 0x1B9F2F) or 0x1B9F11 <= ins.address < 0x1B9F2F,
                   f"lệnh {ins.address:#x} nhảy vào vùng đã thay {t:#x}")
+    for ins in disasm(orig, 0x1BA2D0, 0x1BADE0 - 0x1BA2D0):
+        if ins.mnemonic.startswith("j") and ins.operands[0].type == capstone.x86.X86_OP_IMM:
+            t = ins.operands[0].imm
+            check(not (0x1BA48E <= t < 0x1BA4AB) or 0x1BA48E <= ins.address < 0x1BA4AB,
+                  f"lệnh {ins.address:#x} nhảy vào vùng đã thay của mo.dgl {t:#x}")
     for ins in disasm(orig, 0x24AC30, 0x24B5D0 - 0x24AC30):
         if ins.mnemonic.startswith("j") and ins.operands[0].type == capstone.x86.X86_OP_IMM:
             t = ins.operands[0].imm
@@ -347,7 +355,8 @@ def test_runtime(out):
         regs = {k: 0x1111111100000000 + i for i, k in enumerate(NONVOL)}
         S = P.PAYLOAD_SYMBOLS
         # cave chạy trong frame host: unwind phải giống hệt unwind tại chỗ hook gốc
-        pairs = [("dgj_ret", S["dgj_ret"], 0x1B9DFC), ("dgj_filter", S["dgj_filter"], 0x1B9F11)]
+        pairs = [("dgj_ret", S["dgj_ret"], 0x1B9DFC), ("dgj_filter", S["dgj_filter"], 0x1B9F11),
+                 ("dgl_filter", S["dgl_filter"], 0x1BA48E)]
         insns = disasm(out, S["clo_stage"], S["clo_stage_end"] - S["clo_stage"])
         pairs += [(f"clo_stage sau call @{i.address:#x}", insns[k + 1].address, 0x24B5B1)
                   for k, i in enumerate(insns) if i.mnemonic == "call"]
@@ -383,9 +392,9 @@ def test_runtime(out):
         shutil.rmtree(td, ignore_errors=True)
 
 
-# ----------------------------------------------------------------------------- 7
+# ----------------------------------------------------------------------------- 8
 def test_cli(orig, legacy_path):
-    print("[7] CLI trên bản sao")
+    print("[8] CLI trên bản sao")
     td = tempfile.mkdtemp()
     dll = os.path.join(td, "GameAssembly.dll")
     script = os.path.join(ROOT, "patch_skill_delay.py")
@@ -460,7 +469,7 @@ def test_cli(orig, legacy_path):
 
 def test_old_payload(old_path):
     """DLL v2 dựng bằng payload cũ hơn (code cave khác) -> nhận diện, khôi phục, nâng cấp giữ tính năng."""
-    print("[8] Nâng cấp từ DLL v2 dựng bằng payload cũ")
+    print("[9] Nâng cấp từ DLL v2 dựng bằng payload cũ")
     old = open(old_path, "rb").read()
     on, acc, kind = P.detect(old)
     print(f"    {os.path.basename(old_path)}: {kind}, {sorted(on)}, accept={acc}")
@@ -481,10 +490,11 @@ def test_old_payload(old_path):
 
 
 # ----------------------------------------------------------------------------- 6
-class StoneSim:
-    """Chạy THẬT mã máy stone_tick trong DLL đã dựng (nạp bằng LoadLibraryEx).
-    Mọi hàm game / runtime IL2CPP mà cave gọi được thay bằng callback Python, các con trỏ
-    TypeInfo trỏ tới class giả; nhân vật, hành trang, đá là vùng nhớ giả có đúng offset."""
+class CaveSim:
+    """Chạy THẬT mã máy của cave (stone_tick, quest_tick) trong DLL đã dựng (nạp bằng
+    LoadLibraryEx). Mọi hàm game / runtime IL2CPP mà cave gọi được thay bằng callback Python,
+    các con trỏ TypeInfo trỏ tới class giả; nhân vật, hành trang, đá, nhiệm vụ, NPC là vùng
+    nhớ giả có đúng offset."""
     CRYSTALS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304]
     FEES = [0, 10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240]
     T0 = 13_400_000_000_000          # ms tính từ 1601, cỡ năm 2026
@@ -493,7 +503,7 @@ class StoneSim:
         self.k32 = k32
         self.heap = ctypes.create_string_buffer(0x80000)
         self.top = ctypes.addressof(self.heap)
-        self.path = os.path.join(tempfile.gettempdir(), f"HvnjStone_{os.getpid()}_{name}.dll")
+        self.path = os.path.join(tempfile.gettempdir(), f"HvnjSim_{os.getpid()}_{name}.dll")
         open(self.path, "wb").write(dll_bytes)
         self.base = k32.LoadLibraryExW(self.path, None, 0x1)
         assert self.base, f"LoadLibraryEx lỗi {ctypes.get_last_error()}"
@@ -513,7 +523,19 @@ class StoneSim:
             "bc_ctor": F(U64, U64, U64, U64)(self._bc_ctor),
             "bl_bat": F(U64, U64, U64, U64)(self._bl_bat),
             "il2cpp_iface_invoke1": F(U64, U64, U64, U64, U64)(self._invoke),
+            # quest_tick
+            "mo_dgd": F(U64, U64, U64)(lambda _mo, _mi: 0),
+            "mo_dga": F(U64, U64, U64, U64, U64)(lambda _mo, idx, la, _mi: self.dga.append((idx & 0xFF, la)) or 0),
+            "mo_dgf": F(U64, U64, U64, U64, U64)(lambda _mo, m, npc, _o: self.dgf.append((m & 0xFFFFFFFF, npc)) or 0),
+            "mo_dky": F(U64, U64, U64)(lambda npc, _mi: self.npc if (npc == 25 and self.npc_here) else 0),
+            "ht_cbt": F(ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, U64)(
+                lambda x1, y1, x2, y2, _mi: ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5),
+            "lm_czd": F(U64, U64, ctypes.c_float, ctypes.c_float, U64)(
+                lambda _c, x, y, _mi: self.walks.append((x, y)) or 0),
+            "lj_menu": F(U64, U64, U64, U64, U64)(
+                lambda _s, npc, menu, opt: self.menus.append((npc & 0xFFFFFFFF, menu & 0xFFFFFFFF, opt & 0xFFFFFFFF)) or 0),
         }
+        self.dga, self.dgf, self.walks, self.menus = [], [], [], []
         self.cb_time = F(None, U64)(lambda p: setattr(U64.from_address(p), "value", self.now * 10000))
         for name_, cb in self.cbs.items():
             stub = b"\x48\xb8" + struct.pack("<Q", ctypes.cast(cb, ctypes.c_void_p).value) + b"\xff\xe0"
@@ -522,7 +544,7 @@ class StoneSim:
                   struct.pack("<Q", ctypes.cast(self.cb_time, ctypes.c_void_p).value))
         # class giả: +133h cờ cctor, +0B8h static fields
         self.statics = {}
-        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs"):
+        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo"):
             klass = self.alloc(0x140)
             st = self.alloc(0x200)
             self.w64(klass + 0xB8, st)
@@ -541,6 +563,22 @@ class StoneSim:
         self.session = self.alloc(0x40)
         self.w64(self.service + 0x10, self.session)
         self.fn = ctypes.CFUNCTYPE(None)(self.base + P.PAYLOAD_SYMBOLS["stone_tick"])
+        # quest_tick: mo (GameScr), NPC 25 có vtable kk.cit()/ciu() trả toạ độ
+        self.mo = self.alloc(0x400)
+        self.qfn = ctypes.CFUNCTYPE(None, U64)(self.base + P.PAYLOAD_SYMBOLS["quest_tick"])
+        self.w8(self.char + 0x170, 1)                               # hệ phái 1 -> trường map 1
+        ctypes.c_float.from_address(self.char + 0xB8).value = 100.0
+        ctypes.c_float.from_address(self.char + 0xBC).value = 100.0
+        self.npc_here = True
+        self.npc = self.alloc(0x40)
+        vt = self.alloc(0x200)
+        self.w64(self.npc, vt)
+        self.cb_npc_x = F(ctypes.c_float, U64, U64)(lambda _n, _mi: 110.0)
+        self.cb_npc_y = F(ctypes.c_float, U64, U64)(lambda _n, _mi: 100.0)
+        self.w64(vt + 0x178, ctypes.cast(self.cb_npc_x, ctypes.c_void_p).value)
+        self.w64(vt + 0x188, ctypes.cast(self.cb_npc_y, ctypes.c_void_p).value)
+        self.set_map(1)
+        self.set_tasks([])
 
     # --- bộ nhớ giả
     def alloc(self, n):
@@ -654,6 +692,45 @@ class StoneSim:
         self.sends.append(dict(self.msgs[msg], slot=slot, iface=iface, obj=obj))
         return 0
 
+    def set_map(self, m):
+        self.w16(self.statics["mb"] + 0x5C, m)
+
+    def set_auto(self, on):
+        self.w8(self.statics["ca"] + 0x16, 1 if on else 0)
+
+    def set_tasks(self, tasks):
+        """tasks: (la.mad, count, max, killId, map) -> mo.nfl (List<la>)."""
+        self.tasks = []
+        arr = self.alloc(0x20 + 8 * max(len(tasks), 1))
+        self.w64(arr + 0x18, len(tasks))
+        for i, (mad, cnt, mx, kill, m) in enumerate(tasks):
+            la = self.alloc(0x60)
+            self.w32(la + 0x10, mad)
+            self.w32(la + 0x14, cnt)
+            self.w32(la + 0x18, mx)
+            self.w32(la + 0x38, kill)
+            self.w32(la + 0x3C, m)
+            self.w64(arr + 0x20 + 8 * i, la)
+            self.tasks.append(la)
+        lst = self.alloc(0x20)
+        self.w64(lst + 0x10, arr)
+        self.w32(lst + 0x18, len(tasks))
+        self.w64(self.statics["mo"] + 0x80, lst)
+
+    def qtick(self, dt_ms=500):
+        """Chạy quest_tick(mo) sau dt_ms; trả về (dga, menu, dgf) phát sinh trong lần này."""
+        self.now += dt_ms
+        a, b, c = len(self.dga), len(self.menus), len(self.dgf)
+        self.qfn(self.mo)
+        return self.dga[a:], self.menus[b:], self.dgf[c:]
+
+    def engage(self):
+        """Bật Auto (cạnh lên của ca.fxf) như người chơi bấm nút."""
+        self.set_auto(False)
+        self.qtick(1000)
+        self.set_auto(True)
+        return self.qtick(1000)
+
     def tick(self, dt_ms=1000):
         """Chạy stone_tick sau dt_ms; trả về các packet gửi ra trong lần này."""
         self.now += dt_ms
@@ -685,7 +762,7 @@ def test_stone_logic(orig):
     def sim(name, xu=False, levels=P.STONE_LEVELS_ALL, **kw):
         nonlocal n_cases
         n_cases += 1
-        return StoneSim(k32, P.build(orig, {"stone"}, 0, stone_xu=xu, stone_levels=levels), name, **kw)
+        return CaveSim(k32, P.build(orig, {"stone"}, 0, stone_xu=xu, stone_levels=levels), name, **kw)
 
     def one(sends, cmd, idx, msg):
         ok = len(sends) == 1 and sends[0]["cmd"] == cmd and sends[0]["idx"] == idx
@@ -780,7 +857,7 @@ def test_stone_logic(orig):
         check(not s.tick(), "lên cấp 2: không đụng đá cấp 2, 3 viên cấp 1 chưa đủ, rương chưa nạp")
     finally:
         s.close()
-    fees = [0, TOO_MUCH, TOO_MUCH, 40] + StoneSim.FEES[4:]      # chỉ đủ tiền ra đá cấp 4
+    fees = [0, TOO_MUCH, TOO_MUCH, 40] + CaveSim.FEES[4:]      # chỉ đủ tiền ra đá cấp 4
     s = sim("lvall_cap", fees=fees)
     try:
         s.set_bag([1] * 16 + [None])
@@ -840,7 +917,7 @@ def test_stone_logic(orig):
         s.close()
 
     # 5. gộp nhiều cấp, đá đang chọn trong popup, tối đa 24 viên, static constructor
-    s = sim("mix", fees=[0, TOO_MUCH] + StoneSim.FEES[2:])
+    s = sim("mix", fees=[0, TOO_MUCH] + CaveSim.FEES[2:])
     try:
         s.set_bag([1, 0, 1, 0, "eq", 0, 1, 0, None])
         one(s.tick(), 20, [0, 1, 2, 3, 5, 6, 7], "3 viên cấp 2 + 4 viên cấp 1 = cấp 3 (100%)")
@@ -852,13 +929,13 @@ def test_stone_logic(orig):
         one(s.tick(), 20, [1, 2, 3, 4], "bỏ qua đá đang chọn trong popup")
     finally:
         s.close()
-    s = sim("cap24", crystals=[1, 24] + StoneSim.CRYSTALS[2:])
+    s = sim("cap24", crystals=[1, 24] + CaveSim.CRYSTALS[2:])
     try:
         s.set_bag([0] * 30 + [None])
         one(s.tick(), 20, list(range(24)), "điểm cấp 2 = 24: luyện đúng 24 viên")
     finally:
         s.close()
-    s = sim("over24", crystals=[1, 30, 900] + StoneSim.CRYSTALS[3:])
+    s = sim("over24", crystals=[1, 30, 900] + CaveSim.CRYSTALS[3:])
     try:
         s.set_bag([0] * 30 + [None])
         check(not s.tick(), "cần 30 viên (> 24): không luyện")
@@ -870,6 +947,111 @@ def test_stone_logic(orig):
         s.set_bag([0, 0, 0, 0, None])
         one(s.tick(), 20, [0, 1, 2, 3], "ek chưa khởi tạo")
         check(s.class_inits == [s.ek_klass], "phải chạy static constructor của ek")
+    finally:
+        s.close()
+    print(f"    {n_cases} tình huống")
+
+
+def test_quest_logic(orig):
+    print("[7] Chạy thật quest_tick (nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ giả")
+    if os.name != "nt":
+        print("    bỏ qua (không phải Windows)")
+        return
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.LoadLibraryExW.restype = ctypes.c_void_p
+    k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
+    k32.FreeLibrary.argtypes = [ctypes.c_void_p]
+    k32.VirtualProtect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    n_cases = 0
+    DAILY, TATHU = 0, 1
+
+    def sim(name, feats):
+        nonlocal n_cases
+        n_cases += 1
+        return CaveSim(k32, P.build(orig, set(feats), 0), "q_" + name)
+
+    # 1. chỉ --tathu, chưa có nhiệm vụ, đứng cạnh NPC 25 ở trường -> nhận tà thú ở menu 1
+    s = sim("accept_tathu", ["tathu"])
+    try:
+        _d, menus, _f = s.engage()
+        check(menus == [(25, 1, 0)], f"chỉ --tathu: nhận bằng menu(25, 1, 0): {menus}")
+    finally:
+        s.close()
+
+    # 2. --quest --tathu: nhận nhiệm vụ ngày trước, 4 lần không được thì sang tà thú, hết thì dừng
+    s = sim("accept_order", ["quest", "tathu"])
+    try:
+        menus = s.engage()[1]
+        for _ in range(12):
+            menus += s.qtick(4000)[1]
+        want = [(25, 0, 0)] * 4 + [(25, 1, 0)] * 4
+        check(menus == want, f"thứ tự nhận: {menus}")
+    finally:
+        s.close()
+
+    # 3. chỉ --quest: bỏ qua nhiệm vụ tà thú đang có, vẫn đi nhận nhiệm vụ ngày
+    s = sim("quest_only", ["quest"])
+    try:
+        s.set_tasks([(TATHU, 0, 1, 50, 30)])
+        dga, menus, _f = s.engage()
+        check(not dga and menus == [(25, 0, 0)], f"--quest không đụng tà thú: {dga} {menus}")
+    finally:
+        s.close()
+
+    # 4. có cả hai nhiệm vụ: làm nhiệm vụ ngày trước (index UI = vị trí + 2)
+    s = sim("both", ["quest", "tathu"])
+    try:
+        s.set_tasks([(TATHU, 0, 1, 50, 30), (DAILY, 0, 10, 7, 20)])
+        dga = s.engage()[0]
+        check(dga == [(3, s.tasks[1])], f"ưu tiên nhiệm vụ ngày: {dga}")
+    finally:
+        s.close()
+
+    # 5. tà thú chưa ở map: gọi pipeline của game (tự tìm đường); đã xong thì gọi để về trả
+    for name, task, msg in (("go", (TATHU, 0, 1, 50, 30), "chưa tới map"),
+                            ("done", (TATHU, 1, 1, 50, 30), "đã giết xong")):
+        s = sim("tathu_" + name, ["tathu"])
+        try:
+            s.set_tasks([task])
+            dga = s.engage()[0]
+            check(dga == [(2, s.tasks[0])], f"tà thú {msg}: phải gọi mo.dga(2, la): {dga}")
+            s.w8(s.mo + 0x201, 1)                                   # pipeline đang chạy
+            check(not s.qtick(10_000)[0], f"tà thú {msg}: pipeline đang chạy thì không gọi lại")
+        finally:
+            s.close()
+
+    # 6. ở map tà thú, Auto bật: tà thú chưa xuất hiện -> cứ 15s gọi lại pipeline, không bỏ cuộc
+    s = sim("tathu_wait", ["tathu"])
+    try:
+        s.set_tasks([(TATHU, 0, 1, 50, 30)])
+        s.set_map(30)
+        n = len(s.engage()[0])
+        n += sum(len(s.qtick(5000)[0]) for _ in range(2))           # 10s: chưa tới 15s
+        check(n == 1, f"ở map tà thú: lần đầu gọi ngay, chưa tới 15s không gọi lại ({n})")
+        calls = sum(len(s.qtick(15_000)[0]) for _ in range(10))
+        check(calls == 10, f"chờ tà thú: phải gọi lại mỗi 15s, không dừng sau 3 lần ({calls}/10)")
+        s.set_auto(False)                                           # người chơi tắt Auto
+        check(not s.qtick(15_000)[0] and not s.qtick(15_000)[0], "tắt Auto ở map tà thú -> dừng")
+    finally:
+        s.close()
+
+    # 7. nhiệm vụ ngày ở map, Auto bật: để game tự đánh (giữ hành vi cũ)
+    s = sim("daily_map", ["quest", "tathu"])
+    try:
+        s.set_tasks([(DAILY, 3, 10, 7, 20)])
+        s.set_map(20)
+        dga, menus, _f = s.engage()
+        dga2 = s.qtick(20_000)[0]
+        check(not dga and not dga2 and not menus, f"nhiệm vụ ngày ở map + Auto: không can thiệp {dga} {dga2}")
+    finally:
+        s.close()
+
+    # 8. chưa ở trường: tìm đường về trường theo hệ phái tới NPC 25
+    s = sim("nav_school", ["tathu"])
+    try:
+        s.set_map(5)
+        _d, menus, dgf = s.engage()
+        check(dgf == [(1, 25)] and not menus, f"về trường map 1 tìm NPC 25: {dgf} {menus}")
     finally:
         s.close()
     print(f"    {n_cases} tình huống")
@@ -891,6 +1073,7 @@ def main():
     test_disasm(orig, full)
     test_runtime(full)
     test_stone_logic(orig)
+    test_quest_logic(orig)
     test_cli(orig, args.legacy)
     if args.old_v2:
         test_old_payload(args.old_v2)
