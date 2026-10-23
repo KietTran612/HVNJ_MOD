@@ -116,7 +116,7 @@ def legacy_build(orig, feats):
 
 def test_legacy(orig, legacy_path):
     print("[2] Khôi phục từ bản mod cũ v1")
-    for feats in (["skill"], ["mob"], ["die", "trial"], ["stage"], ["quest"], ["skill"] + P.FEATURES):
+    for feats in (["skill"], ["mob"], ["die", "trial"], ["stage"], ["quest"], list(P.LEGACY_PATCHES)):
         lb = legacy_build(orig, feats)
         check(sha(P.strip_legacy(lb)) == P.ORIGINAL_SHA256, f"strip_legacy {feats}")
         on, _a, kind = P.detect(lb)
@@ -158,6 +158,17 @@ def test_pe(out):
 
 # ----------------------------------------------------------------------------- 4
 EPILOGUE_START = ("ret", "jmp", "pop")
+# Hàm có prologue riêng (ml64 PROC FRAME): (cấp phát stack, thanh ghi push theo thứ tự địa chỉ tăng dần)
+FRAME_FUNCS = {
+    "quest_tick": (0x40, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbx"]),
+    "party_leader": (0x28, ["Rsi", "Rbx"]),
+    "party_tick": (0x30, ["Rdi", "Rsi", "Rbx"]),
+}
+
+
+def func_bounds(name):
+    start = P.PAYLOAD_SYMBOLS[name]
+    return start, next(e[1] for e in P.PAYLOAD_PDATA if e[0] == start)
 
 
 def test_disasm(orig, out):
@@ -165,8 +176,10 @@ def test_disasm(orig, out):
     S = P.PAYLOAD_SYMBOLS
     code_lo, code_hi = P.PAYLOAD_CODE_RVA, P.PAYLOAD_CODE_RVA + 0x1000
     data_lo, data_hi = P.PAYLOAD_DATA_RVA, P.PAYLOAD_DATA_RVA + 0x1000
-    allowed_targets = set(B.GAME_SYMBOLS.values())
-    allowed_mem = {B.GAME_SYMBOLS[k] for k in ("ca_TypeInfo", "mb_TypeInfo", "mo_TypeInfo", "imp_GetSystemTimeAsFileTime")}
+    # hàm game đã biết + điểm vào các hàm có prologue riêng của mod (có unwind info riêng)
+    allowed_targets = set(B.GAME_SYMBOLS.values()) | {S[n] for n in FRAME_FUNCS}
+    allowed_mem = {B.GAME_SYMBOLS[k] for k in ("ca_TypeInfo", "mb_TypeInfo", "mo_TypeInfo", "gb_TypeInfo",
+                                                "imp_GetSystemTimeAsFileTime")}
 
     # đích nhảy về hàm game phải là đầu lệnh
     hosts = {"dgj_accept": (0x1B9C90, 0x1BA0D0), "dgj_skip": (0x1B9C90, 0x1BA0D0),
@@ -175,11 +188,10 @@ def test_disasm(orig, out):
         check(B.GAME_SYMBOLS[name] in insn_starts(orig, a, b), f"{name} không phải đầu lệnh")
     check(disasm(orig, 0x1BA085, 0x10)[1].mnemonic == "xor", "1BA08A phải là xor eax,eax")
 
-    blocks = [("dgj_ret", "dgj_ret_end", True), ("dgj_filter", "dgj_filter_end", True),
-              ("clo_stage", "clo_stage_end", True), ("quest_tick", None, False)]
-    end_quest = max(e[1] for e in P.PAYLOAD_PDATA)
-    for start, end, in_host in blocks:
-        lo, hi = S[start], (S[end] if end else end_quest)
+    blocks = [(n, S[n], S[n + "_end"], True) for n in ("dgj_ret", "dgj_filter", "clo_stage")]
+    blocks += [(n, *func_bounds(n), False) for n in FRAME_FUNCS]
+    check(len(blocks) == len(P.PAYLOAD_PDATA), "mỗi khối code phải có đúng một entry .pdata")
+    for start, lo, hi, in_host in blocks:
         insns = disasm(out, lo, hi - lo)
         check(insns and insns[-1].address + insns[-1].size == hi, f"{start}: disassemble không trọn khối")
         for i, ins in enumerate(insns):
@@ -274,7 +286,8 @@ def test_runtime(out):
         check(prot(P.PAYLOAD_DATA_RVA) in (0x04, 0x08), f".hvnjd protect {prot(P.PAYLOAD_DATA_RVA):#x} không ghi được")
         check(prot(0x18F000) == 0x20, "section il2cpp vẫn phải là RX (cave cũ ghi vào đây -> crash)")
         cfg = ctypes.string_at(base + P.PAYLOAD_DATA_RVA, 16)
-        check(cfg[:4] == b"HVNJ" and cfg[5:8] == b"\x01\x01\x01", f"cfg trong bộ nhớ {cfg.hex()}")
+        want = {P.PAYLOAD_CFG["cfg_" + f]: 1 for f in P.PAYLOAD_FEATURES}
+        check(cfg[:4] == b"HVNJ" and all(cfg[o] == v for o, v in want.items()), f"cfg trong bộ nhớ {cfg.hex()}")
 
         def lookup(rva):
             ib = ctypes.c_uint64()
@@ -312,11 +325,7 @@ def test_runtime(out):
         regs = {k: 0x1111111100000000 + i for i, k in enumerate(NONVOL)}
         S = P.PAYLOAD_SYMBOLS
         # cave chạy trong frame host: unwind phải giống hệt unwind tại chỗ hook gốc
-        pairs = [
-            ("clo_stage sau call dgj", S["clo_stage"] + 7, 0x24B5B1),
-            ("dgj_ret", S["dgj_ret"], 0x1B9DFC),
-            ("dgj_filter", S["dgj_filter"], 0x1B9F11),
-        ]
+        pairs = [("dgj_ret", S["dgj_ret"], 0x1B9DFC), ("dgj_filter", S["dgj_filter"], 0x1B9F11)]
         insns = disasm(out, S["clo_stage"], S["clo_stage_end"] - S["clo_stage"])
         pairs += [(f"clo_stage sau call @{i.address:#x}", insns[k + 1].address, 0x24B5B1)
                   for k, i in enumerate(insns) if i.mnemonic == "call"]
@@ -326,21 +335,27 @@ def test_runtime(out):
             fill_stack()
             b = unwind(host_rva, sbase, regs)
             check(a is not None and a == b, f"unwind {name}: {a} != {b}")
-        # quest_tick: hàm có prologue riêng
-        q = S["quest_tick"]
-        qi = disasm(out, q, max(e[1] for e in P.PAYLOAD_PDATA) - q)
-        after_calls = [qi[k + 1].address for k, i in enumerate(qi) if i.mnemonic == "call"]
-        fill_stack()
-        saved = {"R15": 0x40, "R14": 0x48, "R13": 0x50, "R12": 0x58, "Rdi": 0x60, "Rsi": 0x68, "Rbx": 0x70}
-        for k, o in saved.items():
-            struct.pack_into("<Q", stack, sbase - ctypes.addressof(stack) + o, 0xAB00 + o)
+        # hàm có prologue riêng: unwind sau mỗi call phải trả đúng thanh ghi đã lưu và địa chỉ về
+        n_func = 0
         ret = 0x7FF612345678
-        struct.pack_into("<Q", stack, sbase - ctypes.addressof(stack) + 0x78, ret)
-        for pc in after_calls:
-            r = unwind(pc, sbase, regs)
-            ok = r and r["Rip"] == ret and r["Rsp"] == sbase + 0x80 and all(r[k] == 0xAB00 + o for k, o in saved.items())
-            check(ok, f"unwind quest_tick @{pc:#x}: {r}")
-        print(f"    {len(pairs)} vị trí trong frame host + {len(after_calls)} vị trí trong quest_tick")
+        for name, (alloc, pushed) in FRAME_FUNCS.items():
+            lo, hi = func_bounds(name)
+            fi = disasm(out, lo, hi - lo)
+            fill_stack()
+            saved = {k: alloc + 8 * j for j, k in enumerate(pushed)}
+            for k, o in saved.items():
+                struct.pack_into("<Q", stack, sbase - ctypes.addressof(stack) + o, 0xAB00 + o)
+            struct.pack_into("<Q", stack, sbase - ctypes.addressof(stack) + alloc + 8 * len(pushed), ret)
+            for k, i in enumerate(fi):
+                if i.mnemonic != "call":
+                    continue
+                pc = fi[k + 1].address
+                r = unwind(pc, sbase, regs)
+                ok = r and r["Rip"] == ret and r["Rsp"] == sbase + alloc + 8 * len(pushed) + 8 \
+                    and all(r[kk] == 0xAB00 + o for kk, o in saved.items())
+                check(ok, f"unwind {name} @{pc:#x}: {r}")
+                n_func += 1
+        print(f"    {len(pairs)} vị trí trong frame host + {n_func} vị trí trong {len(FRAME_FUNCS)} hàm riêng")
     finally:
         k32.FreeLibrary(ctypes.c_void_p(base))
         shutil.rmtree(td, ignore_errors=True)
@@ -358,13 +373,13 @@ def test_cli(orig, legacy_path):
         return r.returncode, r.stdout + r.stderr
 
     try:
-        src = open(legacy_path, "rb").read() if legacy_path else legacy_build(orig, ["skill"] + P.FEATURES)
+        src = open(legacy_path, "rb").read() if legacy_path else legacy_build(orig, list(P.LEGACY_PATCHES))
         open(dll, "wb").write(src)
         rc, txt = run("--mob")
         check(rc == 0, f"--mob trên v1: {txt}")
         cur = open(dll, "rb").read()
         on, _a, kind = P.detect(cur)
-        check(kind == "mod v2" and on == set(P.FEATURES), f"nâng cấp v1 -> {kind} {sorted(on)}")
+        check(kind == "mod v2" and on == set(P.LEGACY_PATCHES) - {"skill"}, f"nâng cấp v1 -> {kind} {sorted(on)}")
         check(skill_is_original(cur), "nâng cấp v1 phải gỡ patch 0.3s")
         check(sha(open(dll + ".bak", "rb").read()) == P.ORIGINAL_SHA256, ".bak là bản gốc")
         # DLL v2 cũ (còn 0.3s, không có .bak) -> --status cảnh báo, chạy lại thì gỡ
@@ -397,10 +412,33 @@ def test_cli(orig, legacy_path):
         shutil.rmtree(td, ignore_errors=True)
 
 
+def test_old_payload(old_path):
+    """DLL v2 dựng bằng payload cũ hơn (code cave khác) -> nhận diện, khôi phục, nâng cấp giữ tính năng."""
+    print("[7] Nâng cấp từ DLL v2 dựng bằng payload cũ")
+    old = open(old_path, "rb").read()
+    on, acc, kind = P.detect(old)
+    print(f"    {os.path.basename(old_path)}: {kind}, {sorted(on)}, accept={acc}")
+    check(kind == "mod v2" and on, "phải nhận ra tính năng của payload cũ")
+    check(sha(P.strip_payload(old)) == P.ORIGINAL_SHA256, "strip_payload trên payload cũ")
+    td = tempfile.mkdtemp()
+    try:
+        dll = os.path.join(td, "GameAssembly.dll")
+        open(dll, "wb").write(old)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "patch_skill_delay.py"), "--dll", dll, "--party"],
+                           capture_output=True, text=True, encoding="utf-8")
+        new_on, new_acc, _k = P.detect(open(dll, "rb").read())
+        check(r.returncode == 0 and new_on == on | {"party"} and new_acc == acc,
+              f"--party trên payload cũ: {sorted(new_on)} {r.stdout}")
+        check(open(dll, "rb").read() == P.build(P.strip_payload(old), on | {"party"}, acc), "kết quả = dựng mới từ gốc")
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--original", default=os.path.join(ROOT, "GameAssembly.dll.bak"))
     ap.add_argument("--legacy", help="DLL đã cài bản mod v1 (tùy chọn)")
+    ap.add_argument("--old-v2", help="DLL v2 dựng bằng payload cũ hơn (tùy chọn)")
     args = ap.parse_args()
     orig = open(args.original, "rb").read()
     if sha(orig) != P.ORIGINAL_SHA256:
@@ -412,6 +450,8 @@ def main():
     test_disasm(orig, full)
     test_runtime(full)
     test_cli(orig, args.legacy)
+    if args.old_v2:
+        test_old_payload(args.old_v2)
     print()
     if FAILS:
         print(f"THẤT BẠI: {len(FAILS)} lỗi")

@@ -23,6 +23,7 @@ EXTERN mo_dgf:PROC              ; mo.dgf(int idMap, int idNpc, sbyte option) - t
 EXTERN mo_dgj:PROC              ; static mt mo.dgj() - chon quai cho auto thuong
 EXTERN mo_dgv:PROC              ; static mo.dgv(bool isAuto) - bat/tat nut Auto
 EXTERN mo_dky:PROC              ; static kk mo.dky(int npcId) - tim NPC trong map
+EXTERN mo_djf:PROC              ; static lm mo.djf(int charId) - tim nhan vat khac trong map
 EXTERN lm_cua:PROC              ; static lm lm.cua() - nhan vat cua minh
 EXTERN lm_czd:PROC              ; lm.czd(float xTo, float yTo) - di bo toi toa do
 EXTERN lj_cmy:PROC              ; static lj lj.cmy() - Service
@@ -34,6 +35,7 @@ EXTERN imp_GetSystemTimeAsFileTime:QWORD   ; o IAT cua KERNEL32
 EXTERN ca_TypeInfo:QWORD        ; ca.fxf (+16h) = trang thai nut Auto
 EXTERN mb_TypeInfo:QWORD        ; mb.naj (+5Ch) = map hien tai, mb.nal (+60h) = List<le> cong
 EXTERN mo_TypeInfo:QWORD        ; mo.nfl (+80h) = List<la> nhiem vu (task order)
+EXTERN gb_TypeInfo:QWORD        ; gb.hxf (+18h) = List<ko> thanh vien nhom, [0] = truong nhom
 
 ; ---- Diem quay lai ben trong ham game ---------------------------------------
 EXTERN dgj_accept:PROC          ; mo.dgj: tiep tuc xet con quai (tinh khoang cach)
@@ -42,8 +44,8 @@ EXTERN dgj_epilogue_tail:PROC   ; mo.dgj: epilogue, ngay sau "xor eax, eax"
 EXTERN clo_store:PROC           ; lm.clo: "mov [rbx+200h], rax" roi return
 
 PUBLIC dgj_ret, dgj_ret_end, dgj_filter, dgj_filter_end, clo_stage, clo_stage_end
-PUBLIC quest_tick
-PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept
+PUBLIC quest_tick, party_leader, party_tick
+PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
 STATICS         EQU 0B8h        ; Il2CppClass::static_fields
@@ -51,7 +53,11 @@ LM_STATUS       EQU 05Ch        ; lm.mfx (statusMe): 14 = chet, 5 = chet bay
 LM_CLASS        EQU 170h        ; lm.mil (he phai 1..8)
 LM_X            EQU 0B8h        ; lm.mgv
 LM_Y            EQU 0BCh        ; lm.mgw
+LM_CHARID       EQU 060h        ; lm.charId
+LM_TARGET       EQU 200h        ; lm.mjn: con quai dang danh (nhan vat khac: game ghi khi nhan goi tan cong)
+KO_CHARID       EQU 010h        ; ko.charId (thanh vien nhom)
 MO_NKU          EQU 201h        ; mo.nku: pipeline nhiem vu cua game dang chay
+MT_ALIVE        EQU 044h        ; mt.nut: 0 = quai khong con danh duoc (mo.dgj bo qua)
 MT_LEVELBOSS    EQU 0B0h        ; mt.nvw (short): 1 = tinh anh, 2 = thu linh
 MT_ISBOSS       EQU 0B4h        ; mt.nvy (bool): boss
 LA_TASKID       EQU 10h         ; la.mad: 0 = nhiem vu hang ngay
@@ -75,6 +81,8 @@ Q_MAX_NAV       EQU 6           ; 6 lan (~60s) khong ve duoc truong -> dung
 Q_WALK_MS       EQU 2000        ; lenh di bo toi NPC toi da moi 2s
 Q_ACCEPT_MS     EQU 4000        ; gui lenh nhan nhiem vu toi da moi 4s
 Q_MAX_ACCEPT    EQU 4           ; 4 lan nhan khong duoc -> het luot / dung
+P_TICK_MS       EQU 100         ; nhip xu ly danh theo nhom
+P_MOVE_MS       EQU 500         ; lap lai lenh chay theo truong nhom toi da moi 0.5s
 
 ; =============================================================================
 _DATA SEGMENT ALIGN(16)
@@ -85,7 +93,8 @@ cfg_mob         DB 0            ; 1 = ne tinh anh/thu linh/boss
 cfg_stage       DB 0            ; 1 = tu qua ai Thi Luyen
 cfg_quest       DB 0            ; 1 = auto nhiem vu hang ngay
 cfg_accept      DB 0            ; optionId cua menu(25, 0, ?) de NHAN nhiem vu
-                DB 7 DUP (0)
+cfg_party       DB 0            ; 1 = danh theo nhom (di theo + danh cung muc tieu truong nhom)
+                DB 6 DUP (0)
 ALIGN 8
 st_map          DD 0
                 DD 0
@@ -103,7 +112,10 @@ q_prev_auto     DB 0
 q_accept_tries  DB 0
 q_kicks         DB 0
 q_nav_tries     DB 0
-                DB 7 DUP (0)
+p_active        DB 0
+                DB 6 DUP (0)
+p_last_tick     DQ 0
+p_last_move     DQ 0
 _DATA ENDS
 
 _TEXT SEGMENT ALIGN(16)
@@ -152,12 +164,28 @@ dgj_filter_end LABEL NEAR
 
 ; -----------------------------------------------------------------------------
 ; lm.clo: thay cho "call mo.dgj ; jmp 24B26F". rbx = lm (nhan vat).
+; Danh theo nhom: neu dang di theo truong nhom thi muc tieu = con quai truong
+;   nhom dang danh (hoac khong danh gi de chay theo), bo qua mo.dgj.
 ; Trong Thi Luyen (161..167): neu khong con quai lien tuc STAGE_CLEAR_MS thi
 ;   - map 161..166: di toi cong sang map ke tiep
 ;   - map 167     : tat Auto (dung o ai cuoi)
 ; -----------------------------------------------------------------------------
 ALIGN 16
 clo_stage PROC
+    cmp     byte ptr [cfg_party], 0
+    je      no_party
+    call    party_leader
+    test    rax, rax
+    jz      no_party
+    mov     rax, qword ptr [rax+LM_TARGET]
+    test    rax, rax
+    jz      party_store
+    cmp     dword ptr [rax+MT_ALIVE], 0
+    jne     party_store
+    xor     eax, eax
+party_store:
+    jmp     clo_store
+no_party:
     xor     ecx, ecx
     call    mo_dgj
     test    rax, rax
@@ -274,6 +302,8 @@ clo_stage_end LABEL NEAR
 
 ; -----------------------------------------------------------------------------
 ; Goi tu mo.ctq thay cho "call mo.dgd". rcx = mo (this).
+; Danh theo nhom (party_tick) chay truoc; khi dang di theo truong nhom thi
+; auto nhiem vu tam dung.
 ; Auto nhiem vu hang ngay dua tren pipeline "tu dong lam nhiem vu" cua game:
 ;   - Nguoi choi bat Auto (canh len cua ca.fxf) ngoai Thi Luyen -> kich hoat.
 ;   - Chua co nhiem vu ngay: ve truong theo he phai, toi NPC 25, gui
@@ -307,6 +337,12 @@ quest_tick PROC FRAME
     mov     rbx, rcx
     xor     edx, edx
     call    mo_dgd                      ; giu nguyen hanh vi goc
+    cmp     byte ptr [cfg_party], 0
+    je      q_no_party
+    call    party_tick
+    test    eax, eax
+    jnz     q_resync_auto               ; dang di theo truong nhom -> tam dung auto nhiem vu
+q_no_party:
     cmp     byte ptr [cfg_quest], 0
     je      q_exit
 
@@ -559,9 +595,164 @@ q_exit:
     ret
 quest_tick ENDP
 
+; -----------------------------------------------------------------------------
+; Truong nhom de di theo. Tra ve rax = lm cua truong nhom, hoac 0 khi: tat
+; --party, Auto dang tat, chua co nhom, minh la truong nhom (phan tu [0] cua
+; danh sach nhom), truong nhom khong o cung map, hoac minh dang chet.
+; -----------------------------------------------------------------------------
+ALIGN 16
+party_leader PROC FRAME
+    push    rbx
+    .pushreg rbx
+    push    rsi
+    .pushreg rsi
+    sub     rsp, 28h
+    .allocstack 28h
+    .endprolog
+    xor     esi, esi
+    cmp     byte ptr [cfg_party], 0
+    je      pl_done
+    mov     rax, qword ptr [ca_TypeInfo]
+    test    rax, rax
+    jz      pl_done
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      pl_done
+    cmp     byte ptr [rax+16h], 0       ; Auto phai dang bat
+    je      pl_done
+    xor     ecx, ecx
+    call    lm_cua
+    test    rax, rax
+    jz      pl_done
+    mov     rbx, rax                    ; rbx = nhan vat cua minh
+    mov     eax, dword ptr [rbx+LM_STATUS]
+    cmp     eax, STATUS_DEAD
+    je      pl_done
+    cmp     eax, STATUS_DEADFLY
+    je      pl_done
+    mov     rax, qword ptr [gb_TypeInfo]
+    test    rax, rax
+    jz      pl_done
+    mov     rax, qword ptr [rax+STATICS]
+    test    rax, rax
+    jz      pl_done
+    mov     rax, qword ptr [rax+18h]    ; List<ko>
+    test    rax, rax
+    jz      pl_done
+    cmp     dword ptr [rax+18h], 2      ; it nhat 2 nguoi
+    jl      pl_done
+    mov     rax, qword ptr [rax+10h]    ; ko[]
+    test    rax, rax
+    jz      pl_done
+    cmp     dword ptr [rax+18h], 0
+    je      pl_done
+    mov     rax, qword ptr [rax+20h]    ; ko[0] = truong nhom
+    test    rax, rax
+    jz      pl_done
+    mov     ecx, dword ptr [rax+KO_CHARID]
+    cmp     ecx, dword ptr [rbx+LM_CHARID]
+    je      pl_done                     ; minh la truong nhom
+    xor     edx, edx
+    call    mo_djf
+    test    rax, rax
+    jz      pl_done                     ; truong nhom khong o map nay
+    cmp     rax, rbx
+    je      pl_done
+    mov     rsi, rax
+pl_done:
+    mov     rax, rsi
+    add     rsp, 28h
+    pop     rsi
+    pop     rbx
+    ret
+party_leader ENDP
+
+; -----------------------------------------------------------------------------
+; Goi tu quest_tick moi frame. Tra ve eax = 1 neu dang danh theo nhom.
+;  - Truong nhom dang danh mot con quai con song -> danh cung con do.
+;  - Truong nhom khong danh gi -> bo muc tieu, chay toi cho truong nhom.
+; -----------------------------------------------------------------------------
+ALIGN 16
+party_tick PROC FRAME
+    push    rbx
+    .pushreg rbx
+    push    rsi
+    .pushreg rsi
+    push    rdi
+    .pushreg rdi
+    sub     rsp, 30h
+    .allocstack 30h
+    .endprolog
+    lea     rcx, [rsp+20h]
+    call    qword ptr [imp_GetSystemTimeAsFileTime]
+    mov     rax, qword ptr [rsp+20h]
+    xor     edx, edx
+    mov     ecx, 10000
+    div     rcx
+    mov     rdi, rax                    ; rdi = bay gio (ms)
+    mov     rcx, rax
+    sub     rcx, qword ptr [p_last_tick]
+    cmp     rcx, P_TICK_MS
+    jb      pt_done
+    mov     qword ptr [p_last_tick], rdi
+    call    party_leader
+    test    rax, rax
+    jz      pt_inactive
+    mov     rsi, rax                    ; rsi = truong nhom
+    mov     byte ptr [p_active], 1
+    xor     ecx, ecx
+    call    lm_cua
+    test    rax, rax
+    jz      pt_done
+    mov     rbx, rax                    ; rbx = nhan vat cua minh
+    mov     rax, qword ptr [rsi+LM_TARGET]
+    test    rax, rax
+    jz      pt_follow
+    cmp     dword ptr [rax+MT_ALIVE], 0
+    je      pt_follow
+    mov     qword ptr [rbx+LM_TARGET], rax
+    jmp     pt_done
+pt_follow:
+    mov     qword ptr [rbx+LM_TARGET], 0
+    movss   xmm0, dword ptr [rbx+LM_X]
+    subss   xmm0, dword ptr [rsi+LM_X]
+    andps   xmm0, xmmword ptr [abs_mask]
+    comiss  xmm0, dword ptr [follow_dist]
+    ja      pt_move
+    movss   xmm0, dword ptr [rbx+LM_Y]
+    subss   xmm0, dword ptr [rsi+LM_Y]
+    andps   xmm0, xmmword ptr [abs_mask]
+    comiss  xmm0, dword ptr [follow_dist]
+    jbe     pt_done
+pt_move:
+    mov     rax, rdi
+    sub     rax, qword ptr [p_last_move]
+    cmp     rax, P_MOVE_MS
+    jb      pt_done
+    mov     qword ptr [p_last_move], rdi
+    mov     rcx, rbx
+    movss   xmm1, dword ptr [rsi+LM_X]
+    movss   xmm2, dword ptr [rsi+LM_Y]
+    xor     r9d, r9d
+    call    lm_czd
+    nop
+    jmp     pt_done
+pt_inactive:
+    mov     byte ptr [p_active], 0
+pt_done:
+    movzx   eax, byte ptr [p_active]
+    add     rsp, 30h
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+party_tick ENDP
+
 ; ---- hang so chi doc --------------------------------------------------------
-ALIGN 4
+ALIGN 16
+abs_mask        DD 7FFFFFFFh, 7FFFFFFFh, 7FFFFFFFh, 7FFFFFFFh
 near_dist       REAL4 24.0                          ; nguong "dung canh NPC" cua game
+follow_dist     REAL4 40.0                          ; cach truong nhom hon 40 thi chay theo
 school_map      DB 1, 1, 72, 72, 27, 27, 160, 160   ; he phai 1..8 -> map truong
 
 _TEXT ENDS

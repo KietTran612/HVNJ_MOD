@@ -32,6 +32,7 @@ GAME_SYMBOLS = {
     "mo_dgj": 0x1B9C90,
     "mo_dgv": 0x1C53F0,
     "mo_dky": 0x1E98E0,
+    "mo_djf": 0x1E14F0,
     "lm_cua": 0x24E520,
     "lm_czd": 0x270A10,
     "lj_cmy": 0x237B00,
@@ -41,6 +42,7 @@ GAME_SYMBOLS = {
     "ca_TypeInfo": 0xE59F00,
     "mb_TypeInfo": 0xE5C0E8,
     "mo_TypeInfo": 0xE5C158,
+    "gb_TypeInfo": 0xE5A718,
     "dgj_accept": 0x1B9F2F,
     "dgj_skip": 0x1BA07E,
     "dgj_epilogue_tail": 0x1BA08C,
@@ -54,6 +56,14 @@ CHAINED_BLOCKS = [
     ("dgj_filter", "dgj_filter_end", 0x1B9F11),
     ("clo_stage", "clo_stage_end", 0x24B5AC),
 ]
+
+# Nhóm hook -> các tính năng cần nhóm đó (patcher cài nhóm nếu bật ít nhất 1 tính năng).
+HOOK_USERS = {
+    "core": ["mob", "stage"],
+    "mob": ["mob"],
+    "clo": ["stage", "party"],
+    "tick": ["quest", "party"],
+}
 
 SECTION_ALIGN = 0x1000
 FILE_ALIGN = 0x200
@@ -319,13 +329,16 @@ def build(original_path, ml64):
             (0x1BA485, "3968440F846F010000488B0D931ACA00F6813301000002740D39A9E00000007505E825" + "20F2FF",
              "3968440F846F01000066" + "83B8B0000000000F856101000080B8B4000000000F85540100009090"),
         ],
-        "stage": [
+        "clo": [
+            # lm.clo: chọn mục tiêu auto (đánh theo nhóm, tự qua ải Thí Luyện)
             (0x24B5AC, "E8DFE6F6FFE9B9FCFFFF", "E9" + rel32(0x24B5B1, S["clo_stage"]).hex() + "CC" * 5),
         ],
-        "quest": [
+        "tick": [
+            # mo.ctq: gọi mỗi frame (đánh theo nhóm, auto nhiệm vụ ngày)
             (0x19495E, "E84D0D0200", "E8" + rel32(0x194963, S["quest_tick"]).hex()),
         ],
     }
+    assert set(hooks) == set(HOOK_USERS)
     for feat, lst in hooks.items():
         for rva, o, p in lst:
             ob, pb = bytes.fromhex(o), bytes.fromhex(p)
@@ -334,7 +347,7 @@ def build(original_path, ml64):
             assert orig[off:off + len(ob)] == ob, f"byte goc khong khop tai {rva:#x}"
 
     data_base = layout[data_idx[0]]
-    cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept")}
+    cfg = {k: S[k] - data_base for k in ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party")}
     return dict(
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),
@@ -373,7 +386,8 @@ def emit(p):
         lines.append(f"    '{feat}': [")
         lines += [f"        ({rva:#x}, '{o.lower()}', '{pt.lower()}')," for rva, o, pt in lst]
         lines.append("    ],")
-    lines += ["}", "# === END GENERATED PAYLOAD ==="]
+    lines += ["}", "PAYLOAD_HOOK_USERS = {" + ", ".join(f"'{g}': {tuple(u)!r}" for g, u in HOOK_USERS.items()) + "}"]
+    lines += ["# === END GENERATED PAYLOAD ==="]
     return "\n".join(lines)
 
 

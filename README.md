@@ -1,4 +1,4 @@
-# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (5 Tính Năng)
+# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (6 Tính Năng)
 
 [![Game Version](https://img.shields.io/badge/HVNJ-186-orange.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![Unity](https://img.shields.io/badge/Unity-2020.2.7_x64_IL2CPP-blue.svg)](https://unity.com/)
@@ -10,7 +10,7 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 ---
 
-## 🚀 5 Tính Năng
+## 🚀 6 Tính Năng
 
 > Tính năng "Tốc độ ra chiêu 0.3s" (`--skill`) **đã bị gỡ**. Xem [Thay đổi so với v1](#-thay-đổi-so-với-v1).
 
@@ -57,6 +57,24 @@ Muốn chạy lại thì bật Auto lần nữa.
 
 > Bản v1 có "Thông Thành Phù" và "tự mua phù bằng Yên". Hai chức năng này **đã bị bỏ**: lệnh v1 gọi (`lj.cqj`) thực chất là lệnh xin lại dữ liệu map, không phải lệnh dùng phù, còn lệnh mua dùng chỉ số cửa hàng chưa được kiểm chứng. Thay vào đó, v2 dùng dịch chuyển qua NPC (option 3) của chính game.
 
+### 6. 👥 Đánh theo nhóm — `--party`
+Dành cho **thành viên** trong nhóm (máy của mỗi thành viên đều cần cài mod với `--party`). Thành viên chỉ cần **bật Auto**:
+
+| Tình huống | Thành viên làm gì |
+|---|---|
+| Trưởng nhóm đang đánh một con quái còn sống | Đánh **đúng con quái đó**: chuyển mục tiêu ngay, Auto tự chạy tới đánh. Kể cả Boss/Thủ Lĩnh, dù có bật `--mob`. |
+| Trưởng nhóm không đánh gì | Bỏ mục tiêu riêng và **chạy theo trưởng nhóm** khi cách xa hơn 40 đơn vị (cập nhật mỗi 0.5 giây). |
+| Mình là trưởng nhóm, chưa vào nhóm, tắt Auto, hoặc trưởng nhóm ở map khác | Không can thiệp: Auto hoạt động như bình thường. |
+
+- Khi đang đi theo trưởng nhóm, auto nhiệm vụ ngày (`--quest`) tạm dừng.
+- Thông tin lấy từ chính client:
+  - danh sách nhóm `gb.hxf` (`List<ko>`);
+  - nhân vật trong map tìm qua `mo.djf(charId)`;
+  - con quái trưởng nhóm đang đánh là `lm.mjn`, do game ghi khi nhận gói "người chơi khác tấn công".
+- Tắt tính năng: tắt Auto, hoặc `--remove party`.
+
+> ⚠️ **Chưa kiểm chứng trong game:** trưởng nhóm được hiểu là **người đứng đầu danh sách nhóm**. Đó là thứ tự server gửi, và theo quy ước kiểu Ninja School thì người đầu tiên là trưởng nhóm. Thành viên chỉ đi theo được khi **cùng map** với trưởng nhóm, chưa tự tìm đường sang map khác.
+
 ---
 
 ## 🛠️ Cách dùng
@@ -65,7 +83,8 @@ Cần Python 3.8+ (chỉ dùng thư viện chuẩn). Chạy trong thư mục gam
 
 ```bash
 python patch_skill_delay.py --status          # xem trạng thái
-python patch_skill_delay.py --all             # bật cả 5 tính năng
+python patch_skill_delay.py --all             # bật cả 6 tính năng
+python patch_skill_delay.py --party           # chỉ thêm đánh theo nhóm (máy thành viên)
 python patch_skill_delay.py --mob --stage     # bật thêm tính năng (giữ các tính năng đang bật)
 python patch_skill_delay.py --remove quest    # tắt một tính năng
 python patch_skill_delay.py --accept-option 1 # đổi option nhận nhiệm vụ
@@ -77,7 +96,7 @@ python patch_skill_delay.py --restore         # trả về bản gốc
 - Nếu game cập nhật lên phiên bản khác (SHA-256 không khớp), script từ chối patch để tránh làm hỏng DLL.
 - DLL cũ còn patch "0.3s" sẽ được gỡ patch đó ở lần chạy script kế tiếp (`--status` có cảnh báo).
 
-Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 5 tính năng) vào thư mục game.
+Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 6 tính năng) vào thư mục game.
 
 ---
 
@@ -96,8 +115,9 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 ```
 
 `verify_mod.py` kiểm tra các mục sau:
-- dựng lại đủ 32 tổ hợp tính năng và khôi phục được bản gốc;
+- dựng lại đủ 64 tổ hợp tính năng và khôi phục được bản gốc;
 - gỡ được patch "0.3s" khỏi DLL cũ;
+- nâng cấp DLL v2 dựng bằng payload cũ (`--old-v2`) mà vẫn giữ tính năng;
 - nâng cấp được từ v1;
 - cấu trúc PE;
 - disassemble mọi lệnh nhảy/gọi;
@@ -111,8 +131,8 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x1B9DFC` | `mo.dgj` | trả về quái gần nhất thay vì `null` |
 | `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
 | `0x1BA485` | `mo.dgl` | lọc quái của auto nhiệm vụ |
-| `0x24B5AC` | `lm.clo` | tự qua ải Thí Luyện |
-| `0x19495E` | `mo.ctq` | vòng lặp nhiệm vụ hàng ngày (sau `mo.dgd`) |
+| `0x24B5AC` | `lm.clo` | chọn mục tiêu: theo trưởng nhóm, tự qua ải Thí Luyện |
+| `0x19495E` | `mo.ctq` | mỗi frame: đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
 | `0x1927E2`, `0x192912`, `0x3612E0`, `0x360946` | `mo.ctq`, `hw.cdy`, `hw.cdq` | bỏ đếm ngược khi chết |
 | `0x19C061`, `0x477CBF` | `mo.dek`, `eq.bld` | Auto và tìm đường trong map 161 |
 
