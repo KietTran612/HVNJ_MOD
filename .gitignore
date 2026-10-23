@@ -1,0 +1,19 @@
+# Large archives and binaries (> 100 MB)
+*.zip
+tools/
+
+# Backup and temp files
+*.bak
+*.log
+__pycache__/
+*.pyc
+.system_generated/
+
+# Proprietary Unity game assets (textures, audio, level data)
+Hoc Vien Ninja_Data/
+HVNJ_186_Mod_0.3s/
+UnityCrashHandler64.exe
+
+# Intermediate decompilation metadata
+decompiled_output/cpp2il_out/
+decompiled_output/il2cpp_dump/DummyDll/
