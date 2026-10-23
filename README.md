@@ -1,4 +1,4 @@
-# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (6 Tính Năng)
+# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v2 (5 Tính Năng)
 
 [![Game Version](https://img.shields.io/badge/HVNJ-186-orange.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![Unity](https://img.shields.io/badge/Unity-2020.2.7_x64_IL2CPP-blue.svg)](https://unity.com/)
@@ -10,29 +10,28 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 ---
 
-## 🚀 6 Tính Năng
+## 🚀 5 Tính Năng
 
-### 1. ⚡ Tốc độ ra chiêu 0.3s — `--skill`
-`lm.cwj()` (thời gian hồi chiêu) luôn trả về 0.3 giây, áp dụng cho mọi kỹ năng của mọi hệ phái.
+> Tính năng "Tốc độ ra chiêu 0.3s" (`--skill`) **đã bị gỡ**. Xem [Thay đổi so với v1](#-thay-đổi-so-với-v1).
 
-### 2. 🛡️ Né quái Tinh Anh / Thủ Lĩnh / Boss khi Auto — `--mob`
+### 1. 🛡️ Né quái Tinh Anh / Thủ Lĩnh / Boss khi Auto — `--mob`
 - Auto thường (`mo.dgj`) chọn **quái thường gần nhất**. Quái Tinh Anh (`levelBoss == 1`), Thủ Lĩnh (`levelBoss == 2`) và Boss (`isBos`) bị bỏ qua.
 - Auto nhiệm vụ (`mo.dgl`) cũng bỏ qua các loại quái trên.
 
-### 3. ⏱️ Chết quay về ngay — `--die`
+### 2. ⏱️ Chết quay về ngay — `--die`
 Bỏ đếm ngược khi chết: 15 nhịp còn 1 nhịp, hộp thoại 500 frame còn 2 frame.
 
-### 4. 🏰 Giữ Auto trong Thí Luyện — `--trial`
+### 3. 🏰 Giữ Auto trong Thí Luyện — `--trial`
 Game không còn tự tắt Auto khi vào map 161 và không còn chặn tìm đường trong map 161. Khi chết và hồi sinh ở cửa, Auto tự chạy lại bãi quái.
 
-### 5. 🎯 Tự qua ải Thí Luyện 161 → 167 — `--stage`
+### 4. 🎯 Tự qua ải Thí Luyện 161 → 167 — `--stage`
 - Trong Thí Luyện, Auto đánh **mọi** quái, kể cả Boss và Thủ Lĩnh, để dọn sạch ải.
 - Nếu không tìm thấy quái nào **liên tục 2.5 giây**:
   - ở ải 161–166: nhân vật chạy tới cổng sang ải kế tiếp;
   - ở ải 167: Auto tự tắt.
 - Tính năng này tự kèm phần sửa chọn quái của `mo.dgj` (dùng chung với `--mob`), nên bật riêng `--stage` vẫn chạy được.
 
-### 6. 📜 Auto nhiệm vụ hàng ngày — `--quest`
+### 5. 📜 Auto nhiệm vụ hàng ngày — `--quest`
 Mod không tự viết logic đi lại hay đánh quái mà gọi lại chức năng **"Bấm vào đây để tự động làm nhiệm vụ"** có sẵn trong game (`mo.dga` → `mo.dgh`).
 
 **Bắt đầu:** bật **Auto** ở một map ngoài Thí Luyện. Từ lúc đó mod chạy vòng lặp sau (cứ 0.5 giây kiểm tra một lần):
@@ -66,7 +65,7 @@ Cần Python 3.8+ (chỉ dùng thư viện chuẩn). Chạy trong thư mục gam
 
 ```bash
 python patch_skill_delay.py --status          # xem trạng thái
-python patch_skill_delay.py --all             # bật cả 6 tính năng
+python patch_skill_delay.py --all             # bật cả 5 tính năng
 python patch_skill_delay.py --mob --stage     # bật thêm tính năng (giữ các tính năng đang bật)
 python patch_skill_delay.py --remove quest    # tắt một tính năng
 python patch_skill_delay.py --accept-option 1 # đổi option nhận nhiệm vụ
@@ -76,8 +75,9 @@ python patch_skill_delay.py --restore         # trả về bản gốc
 - Mỗi lần chạy, script **dựng lại DLL từ bản gốc** (đã kiểm tra SHA-256) rồi áp đúng tập tính năng, nên thứ tự chạy không gây xung đột.
 - Bản gốc được giữ ở `GameAssembly.dll.bak`. Nếu file này mất hoặc không phải bản gốc, script tự khôi phục bản gốc từ DLL đã mod (kể cả bản v1).
 - Nếu game cập nhật lên phiên bản khác (SHA-256 không khớp), script từ chối patch để tránh làm hỏng DLL.
+- DLL cũ còn patch "0.3s" sẽ được gỡ patch đó ở lần chạy script kế tiếp (`--status` có cảnh báo).
 
-Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 6 tính năng) vào thư mục game.
+Cách nhanh: chép `GameAssembly.dll` trong repo (đã bật đủ 5 tính năng) vào thư mục game.
 
 ---
 
@@ -96,7 +96,8 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 ```
 
 `verify_mod.py` kiểm tra các mục sau:
-- dựng lại đủ 64 tổ hợp tính năng và khôi phục được bản gốc;
+- dựng lại đủ 32 tổ hợp tính năng và khôi phục được bản gốc;
+- gỡ được patch "0.3s" khỏi DLL cũ;
 - nâng cấp được từ v1;
 - cấu trúc PE;
 - disassemble mọi lệnh nhảy/gọi;
@@ -106,7 +107,6 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 
 | Hook (RVA) | Hàm game | Mục đích |
 |---|---|---|
-| `0x259320` | `lm.cwj` | trả về 0.3f |
 | `0x1B9DB1`, `0x1B9E4B` | `mo.dgj` | bỏ ràng buộc quái theo nhiệm vụ chính |
 | `0x1B9DFC` | `mo.dgj` | trả về quái gần nhất thay vì `null` |
 | `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
@@ -119,6 +119,11 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 ---
 
 ## 🩹 Thay đổi so với v1
+
+**Gỡ tính năng "Tốc độ ra chiêu 0.3s" (`--skill`):**
+- Patch này ép `lm.cwj` trả về 0.3. Nhưng `lm.cwj` không phải hàm hồi chiêu: nó trả về `SkeletonAnimation.timeScale`, tức tốc độ phát hoạt ảnh hiệu ứng skill (giá trị gốc 1.3–4.0).
+- Kết quả là hiệu ứng skill chạy **chậm hơn** bản gốc, còn hồi chiêu thật (`Skill.coolDown`, kiểm tra trong `lm.cvg`) không đổi.
+- Script vẫn nhận ra patch này trong DLL cũ để gỡ; cờ `--skill` giờ chỉ in thông báo.
 
 **Lỗi gây crash:**
 - Cave nhiệm vụ của v1 ghi biến đếm vào section `il2cpp` (chỉ đọc). Vì vậy game crash ngay khi bật Auto.

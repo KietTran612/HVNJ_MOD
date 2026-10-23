@@ -2,8 +2,8 @@
 
     python mod_src/verify_mod.py [--original GameAssembly.dll.bak] [--legacy duong_dan_dll_mod_v1]
 
-1. Dựng DLL cho cả 64 tổ hợp tính năng, nhận diện lại đúng tính năng và khôi phục
-   được bản gốc (SHA-256).
+1. Dựng DLL cho mọi tổ hợp tính năng, nhận diện lại đúng tính năng và khôi phục
+   được bản gốc (SHA-256); gỡ được patch "0.3s" đã bỏ khỏi DLL cũ.
 2. Khôi phục bản gốc từ bản mod cũ v1.
 3. Cấu trúc PE: section mới, SizeOfImage, .pdata sắp xếp đúng.
 4. Disassemble: mọi lệnh nhảy/gọi trong cave trỏ tới địa chỉ đã biết, đích nhảy
@@ -67,8 +67,21 @@ def insn_starts(data, start, end):
 
 
 # ----------------------------------------------------------------------------- 1, 2
+def with_retired_skill(data):
+    """Mô phỏng DLL v2 cũ còn patch 'tốc độ ra chiêu 0.3s' (đã gỡ)."""
+    buf = bytearray(data)
+    for rva, _o, n in P.RETIRED_PATCHES["skill"]:
+        off = P.rva_to_off(buf, rva)
+        buf[off:off + len(n) // 2] = bytes.fromhex(n)
+    return bytes(buf)
+
+
+def skill_is_original(data):
+    return all(P.read_at(data, rva, len(o) // 2) == bytes.fromhex(o) for rva, o, _n in P.RETIRED_PATCHES["skill"])
+
+
 def test_combinations(orig):
-    print("[1] Dựng 64 tổ hợp tính năng")
+    print(f"[1] Dựng {2 ** len(P.FEATURES)} tổ hợp tính năng")
     for r in range(len(P.FEATURES) + 1):
         for combo in itertools.combinations(P.FEATURES, r):
             feats = set(combo)
@@ -79,6 +92,11 @@ def test_combinations(orig):
                 check(accept == 3, f"cfg_accept {sorted(feats)}")
             rec = P.strip_payload(out) if P.has_payload(out) else P.strip_legacy(out)
             check(sha(rec) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)}")
+            check(skill_is_original(out), f"patch 0.3s đã gỡ vẫn còn trong {sorted(feats)}")
+            old = with_retired_skill(out)
+            check(P.detect(old)[0] == feats and P.detect_retired(old) == {"skill"}, f"nhận diện 0.3s cũ {sorted(feats)}")
+            rec = P.strip_payload(old) if P.has_payload(old) else P.strip_legacy(old)
+            check(sha(rec) == P.ORIGINAL_SHA256, f"khôi phục gốc từ {sorted(feats)} + 0.3s cũ")
 
 
 def legacy_build(orig, feats):
@@ -98,18 +116,20 @@ def legacy_build(orig, feats):
 
 def test_legacy(orig, legacy_path):
     print("[2] Khôi phục từ bản mod cũ v1")
-    for feats in (["skill"], ["mob"], ["die", "trial"], ["stage"], ["quest"], P.FEATURES):
+    for feats in (["skill"], ["mob"], ["die", "trial"], ["stage"], ["quest"], ["skill"] + P.FEATURES):
         lb = legacy_build(orig, feats)
         check(sha(P.strip_legacy(lb)) == P.ORIGINAL_SHA256, f"strip_legacy {feats}")
         on, _a, kind = P.detect(lb)
-        # skill/die của v1 trùng byte với v2 -> nhận là v2 cũng đúng
+        # skill/die của v1 trùng byte với v2 -> nhận là v2 cũng đúng; skill không còn là tính năng
         want_kind = "mod v2" if set(feats) <= {"skill", "die"} else "mod cũ v1"
-        check(kind == want_kind and on == set(feats), f"detect legacy {feats} -> {kind} {sorted(on)}")
+        check(kind == want_kind and on == set(feats) - {"skill"}, f"detect legacy {feats} -> {kind} {sorted(on)}")
     if legacy_path:
         lb = open(legacy_path, "rb").read()
         on, _a, kind = P.detect(lb)
         print(f"    {os.path.basename(legacy_path)}: {kind}, {sorted(on)}")
-        check(sha(P.strip_legacy(lb)) == P.ORIGINAL_SHA256, "strip_legacy trên DLL v1 thật")
+        rec = P.strip_legacy(lb)
+        check(kind == "mod cũ v1" and rec is not None and sha(rec) == P.ORIGINAL_SHA256,
+              f"--legacy phải là DLL v1 và khôi phục được ({kind})")
 
 
 # ----------------------------------------------------------------------------- 3
@@ -338,13 +358,27 @@ def test_cli(orig, legacy_path):
         return r.returncode, r.stdout + r.stderr
 
     try:
-        src = open(legacy_path, "rb").read() if legacy_path else legacy_build(orig, P.FEATURES)
+        src = open(legacy_path, "rb").read() if legacy_path else legacy_build(orig, ["skill"] + P.FEATURES)
         open(dll, "wb").write(src)
-        rc, txt = run("--skill")
-        check(rc == 0, f"--skill trên v1: {txt}")
-        on, _a, kind = P.detect(open(dll, "rb").read())
+        rc, txt = run("--mob")
+        check(rc == 0, f"--mob trên v1: {txt}")
+        cur = open(dll, "rb").read()
+        on, _a, kind = P.detect(cur)
         check(kind == "mod v2" and on == set(P.FEATURES), f"nâng cấp v1 -> {kind} {sorted(on)}")
+        check(skill_is_original(cur), "nâng cấp v1 phải gỡ patch 0.3s")
         check(sha(open(dll + ".bak", "rb").read()) == P.ORIGINAL_SHA256, ".bak là bản gốc")
+        # DLL v2 cũ (còn 0.3s, không có .bak) -> --status cảnh báo, chạy lại thì gỡ
+        os.remove(dll + ".bak")
+        open(dll, "wb").write(with_retired_skill(P.build(orig, set(P.FEATURES), 2)))
+        rc, txt = run("--status")
+        check(rc == 0 and "0.3s" in txt, f"--status cảnh báo 0.3s cũ: {txt}")
+        rc, txt = run("--skill")
+        check(rc == 0 and "đã bị gỡ" in txt and P.detect_retired(open(dll, "rb").read()) == {"skill"},
+              f"--skill chỉ báo đã gỡ, không ghi file: {txt}")
+        rc, txt = run("--die")
+        cur = open(dll, "rb").read()
+        on, acc, _k = P.detect(cur)
+        check(rc == 0 and on == set(P.FEATURES) and acc == 2 and skill_is_original(cur), f"gỡ 0.3s khi chạy lại: {txt}")
         rc, txt = run("--remove", "quest", "stage", "--accept-option", "1")
         on, acc, _k = P.detect(open(dll, "rb").read())
         check(rc == 0 and on == set(P.FEATURES) - {"quest", "stage"} and acc == 1, f"--remove: {sorted(on)} {acc}")

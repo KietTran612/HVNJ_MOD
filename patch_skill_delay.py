@@ -23,14 +23,13 @@ BAK_SUFFIX = ".bak"
 ORIGINAL_SHA256 = "a17ddc0b955ca4c4ada07feac0d18a1d8f7232d64b6f654c405669419f92df25"
 ORIGINAL_SIZE = 0xF65800
 
-FEATURES = ["skill", "mob", "die", "trial", "stage", "quest"]
+FEATURES = ["mob", "die", "trial", "stage", "quest"]
 FEATURE_NAMES = {
-    "skill": "1. Tốc độ ra chiêu 0.3s",
-    "mob": "2. Né quái Tinh Anh / Thủ Lĩnh / Boss khi Auto",
-    "die": "3. Chết quay về ngay (bỏ đếm ngược)",
-    "trial": "4. Giữ Auto & tìm đường trong Thí Luyện",
-    "stage": "5. Tự qua ải Thí Luyện 161 -> 167, dừng ở ải cuối",
-    "quest": "6. Auto nhiệm vụ hàng ngày (dùng auto nhiệm vụ của game)",
+    "mob": "1. Né quái Tinh Anh / Thủ Lĩnh / Boss khi Auto",
+    "die": "2. Chết quay về ngay (bỏ đếm ngược)",
+    "trial": "3. Giữ Auto & tìm đường trong Thí Luyện",
+    "stage": "4. Tự qua ải Thí Luyện 161 -> 167, dừng ở ải cuối",
+    "quest": "5. Auto nhiệm vụ hàng ngày (dùng auto nhiệm vụ của game)",
 }
 PAYLOAD_FEATURES = ("mob", "stage", "quest")
 
@@ -38,10 +37,6 @@ PAYLOAD_FEATURES = ("mob", "stage", "quest")
 # CÁC PATCH SỬA TRỰC TIẾP (RVA, byte gốc, byte mới)
 # ==============================================================================
 SIMPLE_PATCHES = {
-    # lm::cwj (thời gian hồi chiêu) -> luôn trả về 0.3f (hằng số có sẵn ở RVA 0xBD23A4)
-    "skill": [
-        (0x259320, "4883ec28488b91e00300004c8bc14885", "f30f10057c909700c390909090909090"),
-    ],
     # mo.ctq: đếm ngược quay về khi chết 15 -> 1; hw.cdy / hw.cdq: hộp thoại chết 500 -> 2
     "die": [
         (0x1927E2, "c680520100000f", "c68052010000" + "01"),
@@ -53,6 +48,15 @@ SIMPLE_PATCHES = {
     "trial": [
         (0x19C061, "7541", "eb41"),
         (0x477CBF, "0f84d3030000", "660f1f440000"),
+    ],
+}
+
+# Tính năng ĐÃ GỠ - chỉ dùng để nhận diện và gỡ khỏi DLL cũ.
+# "Tốc độ ra chiêu 0.3s" ép lm::cwj trả về 0.3f, nhưng cwj là SkeletonAnimation.timeScale
+# của hiệu ứng skill (gốc 1.3-4.0), không phải hồi chiêu -> chỉ làm hiệu ứng chạy chậm lại.
+RETIRED_PATCHES = {
+    "skill": [
+        (0x259320, "4883ec28488b91e00300004c8bc14885", "f30f10057c909700c390909090909090"),
     ],
 }
 
@@ -262,8 +266,7 @@ def strip_payload(data):
     for off, o, _n in PAYLOAD_HEADER_PATCHES:
         ob = bytes.fromhex(o)
         buf[off:off + len(ob)] = ob
-    for feat in list(SIMPLE_PATCHES) + list(PAYLOAD_HOOKS):
-        lst = SIMPLE_PATCHES.get(feat) or PAYLOAD_HOOKS.get(feat)
+    for lst in list(SIMPLE_PATCHES.values()) + list(RETIRED_PATCHES.values()) + list(PAYLOAD_HOOKS.values()):
         for rva, o, _n in lst:
             off = rva_to_off(buf, rva)
             ob = bytes.fromhex(o)
@@ -311,6 +314,12 @@ def find_original(dll_path):
 # ==============================================================================
 # NHẬN DIỆN TRẠNG THÁI
 # ==============================================================================
+def detect_retired(data):
+    """Các tính năng đã gỡ nhưng vẫn còn trong DLL."""
+    return {feat for feat, lst in RETIRED_PATCHES.items()
+            if all(read_at(data, rva, len(n) // 2) == bytes.fromhex(n) for rva, _o, n in lst)}
+
+
 def detect(data):
     """Trả về (tập tính năng đang bật, cfg_accept, kiểu bản build)."""
     if sha256(data) == ORIGINAL_SHA256:
@@ -322,7 +331,7 @@ def detect(data):
                 legacy.add(feat)
         # skill/die của v1 và v2 giống hệt byte; chỉ coi là v1 khi có dấu vết riêng của v1
         if legacy & {"mob", "trial", "stage", "quest"}:
-            return legacy, 0, "mod cũ v1"
+            return legacy & set(FEATURES), 0, "mod cũ v1"
     on = set()
     for feat, lst in SIMPLE_PATCHES.items():
         if all(read_at(data, rva, len(n) // 2) == bytes.fromhex(n) for rva, _o, n in lst):
@@ -352,7 +361,7 @@ def build(original, features, accept_option):
             raise PatchError(f"Byte gốc không khớp tại RVA {rva:#x}")
         buf[off:off + len(nb)] = nb
 
-    for feat in ("skill", "die", "trial"):
+    for feat in ("die", "trial"):
         if feat in features:
             for rva, o, n in SIMPLE_PATCHES[feat]:
                 put(rva, o, n)
@@ -412,6 +421,8 @@ def print_status(dll_path):
         print(f"[{'BẬT' if feat in on else '   '}] {FEATURE_NAMES[feat]}")
     if "quest" in on:
         print(f"      menu nhận nhiệm vụ: menu(25, 0, {accept})")
+    if "skill" in detect_retired(data):
+        print("[!] Còn patch 'tốc độ ra chiêu 0.3s' (đã gỡ vì chỉ làm chậm hiệu ứng). Chạy lại script để gỡ.")
     if kind == "mod cũ v1":
         print("[!] Đây là bản mod cũ (có lỗi crash). Chạy lại với --all hoặc các cờ tính năng để cập nhật.")
     print("=" * 50)
@@ -420,8 +431,8 @@ def print_status(dll_path):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Bản mod Học Viện Ninja 186")
     ap.add_argument("--dll", default=GAME_DLL, help="đường dẫn GameAssembly.dll (mặc định: thư mục hiện tại)")
-    ap.add_argument("--all", "--full", action="store_true", help="bật cả 6 tính năng")
-    ap.add_argument("--skill", action="store_true", help="tốc độ ra chiêu 0.3s")
+    ap.add_argument("--all", "--full", action="store_true", help=f"bật cả {len(FEATURES)} tính năng")
+    ap.add_argument("--skill", action="store_true", help=argparse.SUPPRESS)  # đã gỡ
     ap.add_argument("--mob", action="store_true", help="né quái tinh anh / thủ lĩnh / boss")
     ap.add_argument("--die", action="store_true", help="chết quay về ngay")
     ap.add_argument("--trial", action="store_true", help="giữ Auto trong Thí Luyện")
@@ -438,6 +449,9 @@ def main(argv=None):
     if not os.path.exists(dll):
         print(f"[-] Không tìm thấy {dll}. Chạy script trong thư mục game hoặc dùng --dll.")
         return 1
+    if args.skill:
+        print("[!] Tính năng 'tốc độ ra chiêu 0.3s' đã bị gỡ: patch cũ chỉ làm hiệu ứng skill chạy chậm,"
+              " không giảm hồi chiêu.")
     requested = {f for f in FEATURES if args.all or getattr(args, f)}
     if not (requested or args.remove or args.restore or args.status or args.accept_option is not None):
         ap.print_help()
