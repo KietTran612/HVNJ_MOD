@@ -101,6 +101,9 @@ GAME_SYMBOLS = {
     # phien don hanh trang (hvnj_bag.c)
     "jr_cih": 0x4EB880,             # bool jr.cih() - co dong kham ngoc / truc luyen (jr.lfu)
     "fp_TypeInfo": 0xE5A638,        # fp (cua hang): static jr[] danh sach hang theo ma
+    # dong "Mo ruong do" / "Mo nang cap trang bi" cua menu Mod
+    "mo_ddt": 0x1992D0,             # static mo mo.ddt() - GameScr hien tai
+    "mo_djd": 0x1E0730,             # mo.djd(int typeUI) - mo bang (4 = ruong do, 10 = nang cap)
     "__ImageBase": 0x0,
 }
 

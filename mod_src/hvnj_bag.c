@@ -14,7 +14,9 @@
  *  Ban trang bi: mon trong hanh trang thuoc trang phuc (loai 0,2,4,6,8), trang
  *  suc (3,5,7,9) hoac vu khi (1), chua nang cap, khong khoa, khong co dong kham
  *  ngoc / truc luyen (jr.cih), co IT DONG CHI SO HON mon cung mau ban trong shop
- *  -> gui lenh ban (cmd 14, server tra ve yen). So dong cua ban shop lay giong
+ *  -> gui lenh ban (cmd 14, server tra ve yen). Mon cung loai DU DONG (bang hoac
+ *  nhieu hon ban shop) thi cat vao ruong do (cmd 17, nhu lj.itemBagToBox) toi khi
+ *  ruong day; client chi biet ruong khi da mo ruong it nhat 1 lan (lm.miw). So dong cua ban shop lay giong
  *  khi nguoi choi xem cua hang:
  *    - tai danh sach shop (cmd -30 / sub -103 + ma danh sach, nhu bam the cua hang),
  *    - xem chi tiet mon trong shop (cmd 42 + ma danh sach + o, nhu bam vao mon),
@@ -62,6 +64,7 @@ extern long long s_wait_until;
 #define CA_AUTO       0x16
 #define LM_STATUS     0x5C      /* 14 = chet, 5 = chet bay                        */
 #define LM_BAG        0x1B8     /* jr[] hanh trang                                */
+#define LM_BOX        0x1C0     /* jr[] ruong do (null khi chua mo ruong lan nao)  */
 #define LJ_SESSION    0x10
 #define BC_WRITER     0x20
 #define ARR_LEN       0x18      /* Il2CppArray::max_length                        */
@@ -84,6 +87,7 @@ extern long long s_wait_until;
 #define SUB_OPEN_SHOP   (-103)
 #define CMD_ITEM_INFO   42      /* lj.cnz: requestItemInfo(typeUI, indexUI)       */
 #define CMD_SELL        14      /* lj.coi: ban vat pham (o, so luong)             */
+#define CMD_BAG_TO_BOX  17      /* lj.itemBagToBox: cat vat pham vao ruong (o)    */
 #define LIST_MIN        2       /* ma danh sach shop: 2 vu khi, 16..19 trang suc,  */
 #define LIST_MAX        29      /*   20..29 trang phuc (chan = nam, le = nu)       */
 
@@ -94,6 +98,7 @@ extern long long s_wait_until;
 #define SL_IDLE_MS       30000  /* het viec -> 30s sau moi xet lai                 */
 #define SL_FAIL_MS       300000 /* server khong tra loi SL_MAX_FAILS lan lien tiep -> nghi 5 phut */
 #define SL_LIST_RETRY_MS 300000 /* mot danh sach shop khong ve -> 5 phut sau moi xin lai */
+#define SL_BOX_FAIL_MS   1800000 /* server khong cho cat ruong -> 30 phut moi thu lai (van ban) */
 #define SL_MAX_FAILS     3
 #define SH_MAX           256    /* so mau ghi nho so dong ban shop                 */
 #define NS_MAX           128    /* so mau "khong co trong shop" ghi nho trong lan choi */
@@ -105,6 +110,7 @@ extern long long s_wait_until;
 #define PEND_LIST    1
 #define PEND_INFO    2
 #define PEND_SELL    3
+#define PEND_BOX     4
 
 /* ---- trang thai (doc ten trong kiem thu) ------------------------------------ */
 /* (gan = 0 de la dinh nghia that, khong phai "common symbol" ma builder khong ho tro) */
@@ -113,8 +119,9 @@ unsigned char sl_mode = 0;
 unsigned char sl_pend = 0;      /* lenh dang cho server tra loi                     */
 unsigned char sl_fails = 0;
 int sl_sold = 0;                /* so mon da ban trong phien                        */
+int sl_stored = 0;              /* so mon da cat vao ruong trong phien              */
 long long sl_rest_until = 0;    /* khong bat dau phien ban moi truoc moc nay        */
-static long long sl_last, sl_next, sl_deadline;
+static long long sl_last, sl_next, sl_deadline, sl_box_wait_until;
 static long long sl_list_retry[LIST_MAX + 1];
 static int sl_pend_type, sl_pend_tpl, sl_pend_slot, sl_pend_qty;
 static void* sl_pend_item;
@@ -188,6 +195,14 @@ static int bag_free(void* bag)
     for (i = 0; i < n; i++)
         if (!arr_at(bag, i)) f++;
     return f;
+}
+
+/* Ruong do: 1 = con cho, 0 = day, -1 = client chua co danh sach ruong (chua mo ruong lan nao). */
+static int box_space(void* ch)
+{
+    void* box = AT(ch, LM_BOX, void*);
+    if (!box) return -1;
+    return bag_free(box) > 0;
 }
 
 /* ---- so dong cua ban shop (luu PlayerPrefs "HVNJ_SHOP" = "1" + "mau:so;"...) */
@@ -417,6 +432,11 @@ static int pend_done(void* bag)
         sl_sold++;
         return 1;
     }
+    if (sl_pend == PEND_BOX) {
+        if (sl_pend_slot < arr_len(bag) && arr_at(bag, sl_pend_slot) == sl_pend_item) return 0;
+        sl_stored++;
+        return 1;
+    }
     return 1;
 }
 
@@ -447,6 +467,9 @@ static int sell_step(long long now)
             sl_fails = 0;
         } else if (now < sl_deadline) {
             return 1;
+        } else if (sl_pend == PEND_BOX) {
+            sl_pend = PEND_NONE;                    /* server khong cho cat ruong: thoi cat, van ban */
+            sl_box_wait_until = now + SL_BOX_FAIL_MS;
         } else {
             if (sl_pend == PEND_LIST) sl_list_retry[sl_pend_type] = now + SL_LIST_RETRY_MS;
             sl_pend = PEND_NONE;
@@ -473,6 +496,11 @@ static int sell_step(long long now)
             sl_pend_slot = i;
             sl_pend_qty = AT(it, JR_QTY, int);
             ok = send_msg(CMD_SELL, 1, AT(it, JR_INDEX, int), 0, 1, sl_pend_qty > 1 ? sl_pend_qty : 1);
+        } else if (c >= 0 && sl_mode == MODE_SELL && now >= sl_box_wait_until && box_space(ch) > 0) {
+            sl_pend = PEND_BOX;                     /* du dong: cat vao ruong toi khi ruong day */
+            sl_pend_item = it;
+            sl_pend_slot = i;
+            ok = send_msg(CMD_BAG_TO_BOX, 1, AT(it, JR_INDEX, int), 0, 0, 0);
         } else {
             continue;
         }
@@ -494,6 +522,7 @@ static void begin(int mode)
     sl_pend = PEND_NONE;
     sl_fails = 0;
     sl_sold = 0;
+    sl_stored = 0;
     sl_last = 0;
     sl_next = 0;
 }
@@ -531,6 +560,7 @@ void bag_reset(void)
     sl_pend = PEND_NONE;
     sl_fails = 0;
     sl_rest_until = 0;
+    sl_box_wait_until = 0;
 }
 
 /* Dong "Xem truoc" cua menu Mod: lay so dong ban shop con thieu (khong ban gi). */
@@ -546,7 +576,7 @@ int bag_fetching(void)
 }
 
 /* Dong thu k cua menu Xem truoc vao buf (toi da max ky tu); tra ve so ky tu,
- * -1 khi het mon. *st = 1: se ban, 0: giu, 2: chua biet so dong ban shop. */
+ * -1 khi het mon. *st = 1: se ban, 3: se cat ruong, 0: giu, 2: chua biet so dong ban shop. */
 int bag_describe(int k, wchar* buf, int max, int* st)
 {
     void* ch = me();
@@ -572,8 +602,13 @@ int bag_describe(int k, wchar* buf, int max, int* st)
             if (lines < c) {
                 *st = 1;
                 len = put_text(buf, len, max, L" dòng -> bán");
+            } else if (box_space(ch) > 0) {
+                *st = 3;
+                len = put_text(buf, len, max, L" dòng -> cất rương");
+            } else if (box_space(ch) == 0) {
+                len = put_text(buf, len, max, L" dòng, giữ (rương đầy)");
             } else {
-                len = put_text(buf, len, max, L" dòng, giữ");
+                len = put_text(buf, len, max, L" dòng, giữ (mở rương 1 lần để cất)");
             }
         } else if (c == -2) {
             len = put_text(buf, len, max, L" dòng, không có trong shop, giữ");

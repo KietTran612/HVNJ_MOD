@@ -18,8 +18,9 @@
  7. Chạy THẬT menu "Mod HVNJ" (hvnj_menu.c): hiện menu, tick, lưu / đọc PlayerPrefs,
     dòng "Mod HVNJ" trong menu nhân vật, lệnh của game vẫn tới mo.djh.
  8. Chạy THẬT stone_tick (luyện đá) với nhân vật / hành trang giả.
- 9. Chạy THẬT bag_tick (bán trang bị thiếu dòng -> luyện đá) với shop / server giả:
-    tải danh sách shop, xem chi tiết, bán, giữ đúng món, chờ / nghỉ khi server không trả lời,
+ 9. Chạy THẬT bag_tick (bán đồ thiếu dòng / cất đồ đủ dòng vào rương -> luyện đá) với shop /
+    server giả: tải danh sách shop, xem chi tiết, bán, cất rương tới khi đầy, giữ đúng món,
+    chờ / nghỉ khi server không trả lời,
     thứ tự bán -> luyện đá, auto nhiệm vụ tạm dừng, menu Xem trước.
 10. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
 11. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, lệnh cũ, restore.
@@ -58,6 +59,7 @@ TOGGLE_NAMES = [n for n in P.MENU_ITEMS if n != PREVIEW_LINE][:len(CFG_TOGGLES)]
 T_SELL = CFG_TOGGLES.index("cfg_sell")
 ACT = 0x48560000                        # MOD_ACT_BASE
 ACT_PREVIEW = ACT + 14
+ACT_OPEN_BOX, ACT_OPEN_UP = ACT + 15, ACT + 16
 
 
 def check(cond, msg):
@@ -528,6 +530,7 @@ class CaveSim:
         self.dga, self.dgf, self.walks, self.menus = [], [], [], []
         self.lists, self.iws, self.shown, self.prefs, self.djh = {}, {}, [], {}, []
         self.cih = {}                    # jr -> 1: có dòng khảm ngọc / trục luyện
+        self.djd = []                    # (mo, loại bảng) đã mở bằng mo.djd
         G = B.GAME_SYMBOLS
         self.cbs = {
             "lm_cua": F(U64, U64)(lambda _mi: self.char),
@@ -568,6 +571,9 @@ class CaveSim:
             # phiên dọn hành trang (hvnj_bag.c)
             "bl_bbb": F(U64, U64, U64, U64)(self._bl_bbb),
             "jr_cih": F(U64, U64, U64)(lambda it, _mi: self.cih.get(it, 0)),
+            # "Mở rương đồ" / "Mở nâng cấp trang bị"
+            "mo_ddt": F(U64, U64)(lambda _mi: self.mo),
+            "mo_djd": F(U64, U64, U64, U64)(lambda mo, ui, _mi: self.djd.append((mo, ui & 0xFFFFFFFF)) or 0),
         }
         self.cb_time = F(None, U64)(lambda p: setattr(U64.from_address(p), "value", self.now * 10000))
         for name_, cb in self.cbs.items():
@@ -1011,7 +1017,8 @@ def test_menu(orig, out):
                 want += [(f"Luyện đá lên cấp: {hi} (cất vào rương)", ACT + 10), (f"Luyện đá từ cấp: {lo}", ACT + 11)]
             else:
                 want += [("Luyện đá lên cấp: mọi cấp, không cất rương", ACT + 10)]
-            want += [(f"Option nhận nhiệm vụ ở NPC: {accept}", ACT + 12), ("Đóng", ACT + 13)]
+            want += [(f"Option nhận nhiệm vụ ở NPC: {accept}", ACT + 12), ("Mở rương đồ", ACT_OPEN_BOX),
+                     ("Mở nâng cấp trang bị", ACT_OPEN_UP), ("Đóng", ACT + 13)]
             return menu == want
 
         # dòng "Mod HVNJ" trong menu nhân vật
@@ -1070,11 +1077,17 @@ def test_menu(orig, out):
         s.action(ACT_PREVIEW)
         pv = s.shown[-1]
         check(len(s.shown) == n_shown + 1 and s.prefs["HVNJ_MOD"] == saved
-              and pv[0] == ("Sẽ bán: 0 / 0 món (bấm để xem lại)", ACT_PREVIEW)
+              and pv[0] == ("Bán: 0, cất rương: 0 / 0 món (bấm để xem lại)", ACT_PREVIEW)
               and pv[-2:] == [("Quay lại", ACT), ("Đóng", ACT + 13)], f"Xem trước: {pv}")
         s.action(ACT)
         check(menu_ok(s.shown[-1], t, 1), "Quay lại: về menu Mod")
+        # mở rương đồ / nâng cấp trang bị ở bất kỳ map nào: mo.djd(GameScr, 4 / 10), không mở lại menu
         n_shown = len(s.shown)
+        s.set_map(55)
+        s.action(ACT_OPEN_BOX)
+        s.action(ACT_OPEN_UP)
+        check(s.djd == [(s.mo, 4), (s.mo, 10)] and len(s.shown) == n_shown and s.prefs["HVNJ_MOD"] == saved,
+              f"mở rương đồ = mo.djd(4), nâng cấp = mo.djd(10): {s.djd}")
         # lệnh của game vẫn tới mo.djh nguyên tham số
         s.action(1007, p=0x77)
         s.action(ACT + 32, p=0x78)
@@ -1327,7 +1340,7 @@ def pk(send):
 
 
 def test_sell_logic(orig):
-    print("[9] Chạy thật phiên dọn hành trang (bán trang bị thiếu dòng -> luyện đá) với shop / server giả")
+    print("[9] Chạy thật phiên dọn hành trang (bán đồ thiếu dòng / cất đồ đủ dòng -> luyện đá) với shop / server giả")
     if os.name != "nt":
         print("    bỏ qua (không phải Windows)")
         return
@@ -1337,6 +1350,7 @@ def test_sell_logic(orig):
     LIST = lambda ui: (-30, [0x99, ui])                         # noqa: E731 - như bấm thẻ cửa hàng
     INFO = lambda ui, i: (42, [ui, i])                           # noqa: E731 - như bấm vào món trong shop
     SELL = lambda slot, n=1: (14, [slot, ("int", n)])            # noqa: E731
+    BOX = lambda slot: (17, [slot])                              # noqa: E731 - như lj.itemBagToBox
     AO = dict(id=100, type=2, lines=2, name="Áo vải")            # shop bán áo 100 có 4 dòng
 
     def sim(name, **cfg):
@@ -1525,7 +1539,7 @@ def test_sell_logic(orig):
         s.set_bag([AO, dict(AO, id=101, lines=4, name="Áo da"), None, None])
         s.action(ACT_PREVIEW)
         pv = [c for c, _a in s.shown[-1]]
-        check(pv[:4] == ["Sẽ bán: 0 / 2 món (bấm để xem lại)", "Đang lấy số dòng từ shop...",
+        check(pv[:4] == ["Bán: 0, cất rương: 0 / 2 món (bấm để xem lại)", "Đang lấy số dòng từ shop...",
                          "Áo vải: 2 dòng, chưa biết số dòng shop, giữ", "Áo da: 4 dòng, chưa biết số dòng shop, giữ"],
               f"xem trước lúc chưa biết: {pv}")
         check(nxt(s) == LIST(22), "xem trước: tải danh sách")
@@ -1535,8 +1549,50 @@ def test_sell_logic(orig):
         check(run(s, 5000) == [] and s.get_cfg("sl_state") == 0, "xem trước: không bán gì, xong thì dừng")
         s.action(ACT_PREVIEW)
         pv = [c for c, _a in s.shown[-1]]
-        check(pv[:3] == ["Sẽ bán: 1 / 2 món (bấm để xem lại)", "Áo vải: 2/4 dòng -> bán", "Áo da: 4/3 dòng, giữ"],
-              f"xem trước khi đã biết: {pv}")
+        check(pv[:3] == ["Bán: 1, cất rương: 0 / 2 món (bấm để xem lại)", "Áo vải: 2/4 dòng -> bán",
+                         "Áo da: 4/3 dòng, giữ (mở rương 1 lần để cất)"], f"xem trước khi đã biết: {pv}")
+        s.set_box([None])
+        s.action(ACT_PREVIEW)
+        pv = [c for c, _a in s.shown[-1]]
+        check(pv[0] == "Bán: 1, cất rương: 1 / 2 món (bấm để xem lại)" and pv[2] == "Áo da: 4/3 dòng -> cất rương",
+              f"xem trước khi rương còn chỗ: {pv}")
+        s.set_box([3])
+        s.action(ACT_PREVIEW)
+        pv = [c for c, _a in s.shown[-1]]
+        check(pv[2] == "Áo da: 4/3 dòng, giữ (rương đầy)", f"xem trước khi rương đầy: {pv}")
+    finally:
+        s.close()
+
+    # 13. đồ đủ dòng: cất vào rương tới khi rương đầy (xen với bán theo thứ tự trong hành trang)
+    s = sim("store")
+    try:
+        s.prefs["HVNJ_SHOP"] = "1100:4;"
+        s.set_box([3, None, None])
+        s.set_bag([dict(AO, lines=4), AO, dict(AO, lines=5), dict(AO, lines=4), None])
+        check(nxt(s) == BOX(0), "áo 4 dòng = shop: cất rương (cmd 17)")
+        s.server_to_box(0)
+        check(nxt(s) == SELL(1), "áo 2 dòng: bán")
+        s.set_slot(1, None)
+        check(nxt(s) == BOX(2), "áo 5 dòng: cất rương")
+        s.server_to_box(2)
+        rest = run(s, 5000)
+        check(rest == [] and s.get_cfg("sl_state") == 0 and (i32(s, "sl_sold"), i32(s, "sl_stored")) == (1, 2),
+              f"rương đầy: món đủ dòng còn lại giữ trong hành trang ({rest})")
+    finally:
+        s.close()
+
+    # 14. server không cho cất rương: thôi cất 30 phút nhưng vẫn bán
+    s = sim("box_refused")
+    try:
+        s.prefs["HVNJ_SHOP"] = "1100:4;"
+        s.set_box([None, None])
+        s.set_bag([dict(AO, lines=4), AO, None])
+        got = run(s, 6000)
+        check(got == [BOX(0), SELL(1)], f"cất không được -> chuyển sang bán ngay ({got})")
+        s.set_slot(1, None)
+        s.set_bag([dict(AO, lines=4), AO, None])
+        got = run(s, 10 * 60_000, 1000)
+        check(BOX(0) not in got and got[:1] == [SELL(1)], f"30 phút không thử cất lại, vẫn bán ({got[:3]})")
     finally:
         s.close()
     print(f"    {n_cases} tình huống")

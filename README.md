@@ -25,12 +25,14 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 | Auto nhiệm vụ hàng ngày | tính năng 5 |
 | Auto nhiệm vụ tà thú | tính năng 8 |
 | Đánh theo nhóm (theo trưởng nhóm) | tính năng 6 |
-| Tự bán trang bị thiếu dòng khi đầy | tính năng 9 |
-| Xem trước trang bị sẽ bán | mở menu liệt kê món sẽ bán / giữ, không bán gì |
+| Tự bán đồ thiếu dòng, cất đồ đủ dòng vào rương | tính năng 9 |
+| Xem trước trang bị sẽ bán | mở menu liệt kê món sẽ bán / cất rương / giữ, không bán gì |
 | Tự luyện đá khi đầy (chỉ trả bằng yên) | tính năng 7 |
 | Luyện đá lên cấp: … | mỗi lần bấm: mọi cấp → 2 → 3 → … → 12 → mọi cấp. Chọn cấp thì đá đạt cấp đó được cất vào rương |
 | Luyện đá từ cấp: … | chỉ hiện khi đã chọn cấp đích; mỗi lần bấm tăng 1 (vòng lại 1) |
 | Option nhận nhiệm vụ ở NPC: … | 0 → 1 → 2 → 3 (dùng khi nhận nhiệm vụ không được) |
+| Mở rương đồ | mở bảng rương đồ ở bất kỳ map nào |
+| Mở nâng cấp trang bị | mở bảng nâng cấp trang bị ở bất kỳ map nào |
 | Đóng | đóng menu |
 
 - **Không auto nào dùng xu.** Chỉ luyện đá là tốn phí, và chỉ trả bằng yên. Bán trang bị thì nhận về yên.
@@ -142,7 +144,7 @@ Dành cho **thành viên** trong nhóm (máy của mỗi thành viên đều c�
 > ⚠️ **Chưa kiểm chứng trong game:** trưởng nhóm được hiểu là **người đứng đầu danh sách nhóm**. Đó là thứ tự server gửi, và theo quy ước kiểu Ninja School thì người đầu tiên là trưởng nhóm. Thành viên chỉ đi theo được khi **cùng map** với trưởng nhóm, chưa tự tìm đường sang map khác.
 
 ### 7. 💎 Tự luyện đá tại chỗ khi hành trang đầy
-Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod bắt đầu một **đợt luyện** ngay tại chỗ, không cần tới NPC. Nếu cũng tick bán trang bị thì đợt luyện chạy **ngay sau khi bán xong** (xem [tính năng 9](#9--tự-bán-trang-bị-thiếu-dòng--phiên-dọn-hành-trang)). Đá cấp thấp được nâng dần lên cho tới khi không còn nhóm nào luyện được, để Auto nhặt tiếp được đồ.
+Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod bắt đầu một **đợt luyện** ngay tại chỗ, không cần tới NPC. Nếu cũng tick bán trang bị thì đợt luyện chạy **ngay sau khi bán xong** (xem [tính năng 9](#9--tự-bán-đồ-thiếu-dòng-cất-đồ-đủ-dòng--phiên-dọn-hành-trang)). Đá cấp thấp được nâng dần lên cho tới khi không còn nhóm nào luyện được, để Auto nhặt tiếp được đồ.
 
 **Cách game luyện đá** (popup "Luyện đá", lớp `ek`):
 - Mỗi loại đá (vật phẩm loại 26, id 0–11 = đá cấp 1–12) có một **điểm** do server gửi (`mc.nde`).
@@ -201,10 +203,10 @@ Giống auto nhiệm vụ ngày, mod dùng lại pipeline "tự động làm nhi
 
 > ⚠️ **Chưa kiểm chứng trong game:** option **nhận** trong menu tà thú = 0 là suy luận, giống nhiệm vụ ngày. Menu 1 và option 2 (trả) lấy từ code game nên chắc chắn. Nếu nhận không được, đổi dòng "Option nhận nhiệm vụ ở NPC" sang 1. Lưu ý dòng này đổi cả option nhận nhiệm vụ ngày.
 
-### 9. 🧹 Tự bán trang bị thiếu dòng & phiên dọn hành trang
+### 9. 🧹 Tự bán đồ thiếu dòng, cất đồ đủ dòng & phiên dọn hành trang
 Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod mở một **phiên dọn hành trang**, làm lần lượt từng việc, mỗi lúc một việc:
 
-1. **Bán trang bị thiếu dòng** (dòng tick "Tự bán trang bị thiếu dòng khi đầy").
+1. **Bán trang bị thiếu dòng, cất trang bị đủ dòng vào rương** (dòng tick "Tự bán đồ thiếu dòng, cất đồ đủ dòng vào rương"). Làm theo thứ tự ô trong hành trang.
 2. **Luyện đá** (tính năng 7). Bước này chạy ngay sau bước 1, kể cả khi bước 1 đã làm trống chỗ.
 3. **Cất đá cấp đích vào rương** (nằm trong tính năng 7).
 
@@ -225,6 +227,11 @@ Bán và luyện đều gửi lệnh theo **vị trí ô** trong hành trang, n�
 
 Mọi thứ khác **không bao giờ bị bán**: thời trang, đá, bình HP/MP, thức ăn, đồ nhiệm vụ, nguyên liệu, mẫu không có trong shop, và món mod chưa biết số dòng của bản shop.
 
+**Món nào được cất vào rương:** trang bị qua đủ các điều kiện trên (cùng loại, +0, không khóa, không dòng đặc biệt) nhưng có số dòng **bằng hoặc nhiều hơn** bản shop. Mod gửi cmd 17 (ô), giống lệnh chuyển đồ vào rương của game, cho tới khi **rương đầy** thì thôi; món còn lại giữ trong hành trang.
+- Mod chỉ biết rương còn chỗ khi client đã có danh sách rương, tức bạn đã **mở rương đồ ít nhất một lần** từ lúc vào game.
+- Server không chuyển (ví dụ bắt đứng ở thủ kho) thì mod thôi cất 30 phút, việc bán vẫn chạy.
+- Đồ đã nâng cấp, khóa, có dòng khảm ngọc / trục luyện, mẫu không có trong shop không bị cất.
+
 **Lấy số dòng của bản trong shop** (ngầm, không cần về làng, không bật cửa hàng lên màn hình):
 
 | Bước | Lệnh (giống game) |
@@ -243,9 +250,18 @@ Khi cửa hàng chưa mở, game chỉ lưu dữ liệu về: `fp.boa` / `fp.bor
 - 3 lệnh liên tiếp không được trả lời thì nghỉ 5 phút.
 - Hết món để bán thì 30 giây sau mới xét lại.
 
-**Xem trước:** dòng "Xem trước trang bị sẽ bán" trong menu Mod mở một menu liệt kê từng món, ví dụ `Áo vải: 2/4 dòng -> bán`, `Áo da: 4/3 dòng, giữ`. Mở menu này thì mod cũng lấy dần số dòng shop còn thiếu, kể cả khi chưa tick bán, Auto đang tắt hay hành trang chưa đầy. Menu này **không bán gì**. Bấm một dòng bất kỳ để xem lại.
+**Xem trước:** dòng "Xem trước trang bị sẽ bán" trong menu Mod mở một menu liệt kê từng món, ví dụ `Áo vải: 2/4 dòng -> bán`, `Áo da: 4/3 dòng -> cất rương` (hoặc `giữ (rương đầy)`, `giữ (mở rương 1 lần để cất)`). Mở menu này thì mod cũng lấy dần số dòng shop còn thiếu, kể cả khi chưa tick bán, Auto đang tắt hay hành trang chưa đầy. Menu này **không bán gì**. Bấm một dòng bất kỳ để xem lại.
 
 > ⚠️ **Chưa kiểm chứng trong game:** client không chặn tải danh sách shop, xem chi tiết hay bán khi đứng xa NPC, nhưng chưa biết server có chấp nhận không. Nếu server không trả lời thì mod tự nghỉ như trên. Số dòng được đếm giống nhau cho món trong hành trang và bản shop (mọi dòng trong dữ liệu món đồ); nên mở "Xem trước" để đối chiếu với số dòng thấy trong game trước khi bật bán.
+
+### 📦 Mở rương đồ / nâng cấp trang bị ở bất kỳ map nào
+Hai dòng **"Mở rương đồ"** và **"Mở nâng cấp trang bị"** trong menu Mod mở bảng tương ứng của game ngay tại chỗ. Đây là lệnh bấm là chạy, không có tick.
+
+- Game mở mọi bảng bằng `mo.djd(loại)`: rương đồ = 4, nâng cấp trang bị = 10. Bình thường hàm này chạy khi server báo "mở bảng" sau lúc nói chuyện với NPC, nhưng chính client cũng tự gọi nó (ví dụ nút Auto trên thanh Top), nên mod gọi được ở bất kỳ map nào.
+- **Rương đồ:** nếu từ lúc vào game đã mở rương lần nào thì bảng hiện ngay danh sách rương. Nếu chưa, bảng xin danh sách từ server.
+- **Nâng cấp trang bị:** bảng dùng đồ trong hành trang nên mở là có đủ.
+
+> ⚠️ **Chưa kiểm chứng trong game:** client không chặn mở các bảng này ở xa NPC, nhưng chưa biết server có trả danh sách rương, cho chuyển đồ ra / vào rương, hay cho nâng cấp (cmd 21) khi đứng xa NPC không.
 
 ### 🛒 Nút Shop luôn hiện ở mọi map
 Sửa cố định, **không có dòng tick**: cài mod là có.
@@ -304,12 +320,12 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 `verify_mod.py` kiểm tra các mục sau:
 - cài mod: nhận ra bản v3, **mọi cờ mặc định tắt**, khôi phục được bản gốc;
 - **chạy thật từng cave chặn theo cờ** (31 tình huống, qua trampoline): cờ tắt thì nhảy đúng đích của lệnh gốc và giữ giá trị gốc, cờ bật thì ra hành vi của mod;
-- **chạy thật menu Mod** (hàm C): menu nhân vật có thêm dòng "Mod HVNJ"; menu hiện đúng chữ và `[x]`; tick / bỏ tick đổi đúng cờ và xoá trạng thái dở dang; lưu / đọc `PlayerPrefs`, bỏ qua chuỗi lưu sai; lệnh của game vẫn tới `mo.djh` nguyên tham số;
+- **chạy thật menu Mod** (hàm C): menu nhân vật có thêm dòng "Mod HVNJ"; "Mở rương đồ" / "Mở nâng cấp trang bị" gọi `mo.djd(4)` / `mo.djd(10)` ở map ngoài làng; menu hiện đúng chữ và `[x]`; tick / bỏ tick đổi đúng cờ và xoá trạng thái dở dang; lưu / đọc `PlayerPrefs`, bỏ qua chuỗi lưu sai; lệnh của game vẫn tới `mo.djh` nguyên tham số;
 - **chạy thật mã máy luyện đá** (`stone_tick`) trong DLL đã nạp:
   - các hàm game được thay bằng callback Python;
   - nhân vật, hành trang và bảng điểm đá là dữ liệu giả;
   - kiểm tra packet gửi ra ở 24 tình huống, gồm cả chưa tick thì không luyện: chọn đá, chờ/gửi lại/nghỉ, đủ hay thiếu yên (có xu cũng không luyện), chỉ gửi cmd 20, leo cấp tới cấp đích rồi cất rương, rương chưa nạp/đầy/bị từ chối, gộp nhiều cấp, giới hạn 24 viên;
-- **chạy thật phiên dọn hành trang** (`bag_tick`) với shop và server giả, ở 15 tình huống: tải danh sách shop (nam / nữ, trang sức, vũ khí), xem chi tiết, bán đúng món thiếu dòng và giữ mọi món khác, nhớ số dòng vào `PlayerPrefs`, chờ / thử lại / nghỉ khi server không trả lời, không chạy khi chưa tick / tắt Auto / chưa đầy / đang chết, bán xong mới luyện đá, auto nhiệm vụ tạm dừng trong lúc dọn, menu Xem trước không bán gì;
+- **chạy thật phiên dọn hành trang** (`bag_tick`) với shop và server giả, ở 17 tình huống: tải danh sách shop (nam / nữ, trang sức, vũ khí), xem chi tiết, bán đúng món thiếu dòng và giữ mọi món khác, cất đồ đủ dòng vào rương tới khi đầy, thôi cất khi server không cho, nhớ số dòng vào `PlayerPrefs`, chờ / thử lại / nghỉ khi server không trả lời, không chạy khi chưa tick / tắt Auto / chưa đầy / đang chết, bán xong mới luyện đá, auto nhiệm vụ tạm dừng trong lúc dọn, menu Xem trước không bán gì;
 - **chạy thật mã máy auto nhiệm vụ** (`quest_tick`) với NPC, map và nhiệm vụ giả, ở 10 tình huống: chưa tick thì không làm gì, thứ tự nhận (ngày → tà thú), menu nhận tà thú, ưu tiên nhiệm vụ ngày, chờ tà thú xuất hiện, tắt Auto thì dừng;
 - gỡ được patch "0.3s" khỏi DLL cũ;
 - nâng cấp các DLL v2 cũ hoặc bản v3 dựng trước đó (`--old-v2`, nhiều file) lên bản menu hiện tại;

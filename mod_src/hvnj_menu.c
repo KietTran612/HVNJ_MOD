@@ -9,6 +9,9 @@
  *    game goi mo.djh, action_hook chuyen ve mod_action.
  *  - Dong "Xem truoc trang bi se ban" mo menu thu hai liet ke mon se ban / giu
  *    (hvnj_bag.c), dong thoi lay so dong ban shop con thieu (khong ban gi).
+ *  - Dong "Mo ruong do" / "Mo nang cap trang bi": mo bang cua game o bat ky map
+ *    nao bang mo.djd(loai) - ham game goi khi server bao mo bang sau khi noi
+ *    chuyen voi NPC (va tu goi cho nut Auto tren thanh Top).
  *
  *  Quy uoc: khong dung CRT, khong co bang con tro (dia chi tuyet doi bi cam
  *  vi ASLR), moi doi tuong managed tao qua ham cua game / runtime IL2CPP.
@@ -31,6 +34,8 @@ extern void iw_ctor_caption(void* self, Il2CppString* caption, int action, void*
 extern void* ms_dkz(void* method);                                   /* menu popup chung      */
 extern void ms_dla(void* ms, void* list, int pos, int isNpc, int isTask, int isTaskPhu, void* method);
 extern Il2CppString* prefs_get_string(Il2CppString* key, void* method);
+extern void* mo_ddt(void* method);                                   /* GameScr (mo) hien tai */
+extern void mo_djd(void* mo, int typeUI, void* method);              /* mo bang theo loai     */
 extern void prefs_set_string(Il2CppString* key, Il2CppString* value, void* method);
 
 /* o metadata (TypeInfo / MethodInfo) cua game */
@@ -51,7 +56,7 @@ extern long long st_empty_since, s_wait_until;
 extern void bag_reset(void);
 extern void bag_preview_start(void);
 extern int bag_fetching(void);
-extern int bag_describe(int k, wchar* buf, int max, int* st);    /* st: 1 ban, 0 giu, 2 chua biet */
+extern int bag_describe(int k, wchar* buf, int max, int* st);    /* st: 1 ban, 3 cat ruong, 0 giu, 2 chua biet */
 
 #define MOD_ACT_BASE 0x48560000   /* phai trung voi hvnj_caves.asm */
 #define ACT_OPEN     0
@@ -61,7 +66,11 @@ extern int bag_describe(int k, wchar* buf, int max, int* st);    /* st: 1 ban, 0
 #define ACT_ACCEPT   12
 #define ACT_CLOSE    13
 #define ACT_PREVIEW  14           /* xem truoc trang bi se ban (va lam moi) */
-#define ACT_MAX      14
+#define ACT_OPEN_BOX 15           /* mo ruong do o bat ky map nao */
+#define ACT_OPEN_UP  16           /* mo bang nang cap trang bi o bat ky map nao */
+#define ACT_MAX      16
+#define UI_BOX       4            /* mo.djd: ruong do (fp che do ruong; chua co lm.miw thi xin server) */
+#define UI_UPGRADE   10           /* mo.djd: nang cap trang bi (gw) */
 #define N_TOGGLE     9
 #define T_SELL       7            /* vi tri dong "Tu ban trang bi" */
 #define T_STONE      8
@@ -95,7 +104,7 @@ static const wchar* toggle_name(int i)
     if (i == 4) return L"Auto nhiệm vụ hàng ngày";
     if (i == 5) return L"Auto nhiệm vụ tà thú";
     if (i == 6) return L"Đánh theo nhóm (theo trưởng nhóm)";
-    if (i == T_SELL) return L"Tự bán trang bị thiếu dòng khi đầy";
+    if (i == T_SELL) return L"Tự bán đồ thiếu dòng, cất đồ đủ dòng vào rương";
     return L"Tự luyện đá khi đầy (chỉ trả bằng yên)";
 }
 
@@ -241,6 +250,10 @@ static void show_menu(void)
     n = put(b, 0, L"Option nhận nhiệm vụ ở NPC: ");
     n = put_num(b, n, cfg_accept);
     add_item(list, b, n, ACT_ACCEPT);
+    n = put(b, 0, L"Mở rương đồ");
+    add_item(list, b, n, ACT_OPEN_BOX);
+    n = put(b, 0, L"Mở nâng cấp trang bị");
+    add_item(list, b, n, ACT_OPEN_UP);
     n = put(b, 0, L"Đóng");
     add_item(list, b, n, ACT_CLOSE);
     menu = ms_dkz(0);
@@ -254,7 +267,7 @@ static void show_preview(void)
     wchar b[BUF_MAX];
     void* list;
     void* menu;
-    int k, n, st, total = 0, count = 0, unknown = 0;
+    int k, n, st, total = 0, count = 0, store = 0, unknown = 0;
     if (!ensure_metadata()) return;
     list = il2cpp_object_new(list_iw_TypeInfo);
     if (!list) return;
@@ -262,10 +275,13 @@ static void show_preview(void)
     for (k = 0; k < PREVIEW_MAX && bag_describe(k, b, BUF_MAX, &st) >= 0; k++) {
         total++;
         if (st == 1) count++;
+        if (st == 3) store++;
         if (st == 2) unknown = 1;
     }
-    n = put(b, 0, L"Sẽ bán: ");
+    n = put(b, 0, L"Bán: ");
     n = put_num(b, n, count);
+    n = put(b, n, L", cất rương: ");
+    n = put_num(b, n, store);
     n = put(b, n, L" / ");
     n = put_num(b, n, total);
     n = put(b, n, L" món (bấm để xem lại)");
@@ -321,6 +337,10 @@ int mod_action(int action)
     } else if (i == ACT_PREVIEW) {
         bag_preview_start();
         show_preview();
+        return 1;
+    } else if (i == ACT_OPEN_BOX || i == ACT_OPEN_UP) {
+        void* mo = mo_ddt(0);
+        if (mo) mo_djd(mo, i == ACT_OPEN_BOX ? UI_BOX : UI_UPGRADE, 0);
         return 1;
     }
     if (i != ACT_OPEN) cfg_save();
