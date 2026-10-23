@@ -1,4 +1,4 @@
-# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v3 (8 Tính Năng, bật / tắt trong game)
+# Học Viện Ninja (HVNJ 186) - Bản Mod Toàn Diện v3 (9 Tính Năng, bật / tắt trong game)
 
 [![Game Version](https://img.shields.io/badge/HVNJ-186-orange.svg)](https://github.com/KietTran612/HVNJ_MOD)
 [![Unity](https://img.shields.io/badge/Unity-2020.2.7_x64_IL2CPP-blue.svg)](https://unity.com/)
@@ -25,20 +25,22 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 | Auto nhiệm vụ hàng ngày | tính năng 5 |
 | Auto nhiệm vụ tà thú | tính năng 8 |
 | Đánh theo nhóm (theo trưởng nhóm) | tính năng 6 |
+| Tự bán trang bị thiếu dòng khi đầy | tính năng 9 |
+| Xem trước trang bị sẽ bán | mở menu liệt kê món sẽ bán / giữ, không bán gì |
 | Tự luyện đá khi đầy (chỉ trả bằng yên) | tính năng 7 |
 | Luyện đá lên cấp: … | mỗi lần bấm: mọi cấp → 2 → 3 → … → 12 → mọi cấp. Chọn cấp thì đá đạt cấp đó được cất vào rương |
 | Luyện đá từ cấp: … | chỉ hiện khi đã chọn cấp đích; mỗi lần bấm tăng 1 (vòng lại 1) |
 | Option nhận nhiệm vụ ở NPC: … | 0 → 1 → 2 → 3 (dùng khi nhận nhiệm vụ không được) |
 | Đóng | đóng menu |
 
-- **Không auto nào dùng xu.** Chỉ luyện đá là tốn phí, và chỉ trả bằng yên.
+- **Không auto nào dùng xu.** Chỉ luyện đá là tốn phí, và chỉ trả bằng yên. Bán trang bị thì nhận về yên.
 - **Nút Shop trên thanh Top luôn hiện ở mọi map.** Sửa cố định, không có dòng tick (xem [Nút Shop](#-nút-shop-luôn-hiện-ở-mọi-map)).
 - **Mặc định tắt hết.** Lựa chọn được lưu (Unity `PlayerPrefs`, khóa `HVNJ_MOD`) nên lần mở game sau vẫn giữ.
 - Tick / bỏ tick một tính năng đang chạy dở thì trạng thái dở dang của nó được xoá. Auto nhiệm vụ / tà thú bắt đầu khi bạn **bật Auto** sau khi đã tick.
 
 ---
 
-## 🚀 8 Tính Năng
+## 🚀 9 Tính Năng
 
 > Tính năng "Tốc độ ra chiêu 0.3s" **đã bị gỡ**. Xem [Thay đổi so với v1](#-thay-đổi-so-với-v1).
 
@@ -140,7 +142,7 @@ Dành cho **thành viên** trong nhóm (máy của mỗi thành viên đều c�
 > ⚠️ **Chưa kiểm chứng trong game:** trưởng nhóm được hiểu là **người đứng đầu danh sách nhóm**. Đó là thứ tự server gửi, và theo quy ước kiểu Ninja School thì người đầu tiên là trưởng nhóm. Thành viên chỉ đi theo được khi **cùng map** với trưởng nhóm, chưa tự tìm đường sang map khác.
 
 ### 7. 💎 Tự luyện đá tại chỗ khi hành trang đầy
-Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod bắt đầu một **đợt luyện** ngay tại chỗ, không cần tới NPC. Đá cấp thấp được nâng dần lên cho tới khi không còn nhóm nào luyện được, để Auto nhặt tiếp được đồ.
+Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod bắt đầu một **đợt luyện** ngay tại chỗ, không cần tới NPC. Nếu cũng tick bán trang bị thì đợt luyện chạy **ngay sau khi bán xong** (xem [tính năng 9](#9--tự-bán-trang-bị-thiếu-dòng--phiên-dọn-hành-trang)). Đá cấp thấp được nâng dần lên cho tới khi không còn nhóm nào luyện được, để Auto nhặt tiếp được đồ.
 
 **Cách game luyện đá** (popup "Luyện đá", lớp `ek`):
 - Mỗi loại đá (vật phẩm loại 26, id 0–11 = đá cấp 1–12) có một **điểm** do server gửi (`mc.nde`).
@@ -199,6 +201,52 @@ Giống auto nhiệm vụ ngày, mod dùng lại pipeline "tự động làm nhi
 
 > ⚠️ **Chưa kiểm chứng trong game:** option **nhận** trong menu tà thú = 0 là suy luận, giống nhiệm vụ ngày. Menu 1 và option 2 (trả) lấy từ code game nên chắc chắn. Nếu nhận không được, đổi dòng "Option nhận nhiệm vụ ở NPC" sang 1. Lưu ý dòng này đổi cả option nhận nhiệm vụ ngày.
 
+### 9. 🧹 Tự bán trang bị thiếu dòng & phiên dọn hành trang
+Khi **đang bật Auto** mà hành trang chỉ còn **≤ 1 ô trống**, mod mở một **phiên dọn hành trang**, làm lần lượt từng việc, mỗi lúc một việc:
+
+1. **Bán trang bị thiếu dòng** (dòng tick "Tự bán trang bị thiếu dòng khi đầy").
+2. **Luyện đá** (tính năng 7). Bước này chạy ngay sau bước 1, kể cả khi bước 1 đã làm trống chỗ.
+3. **Cất đá cấp đích vào rương** (nằm trong tính năng 7).
+
+Bán và luyện đều gửi lệnh theo **vị trí ô** trong hành trang, nên chạy song song có thể bán hoặc luyện nhầm ô. Vì vậy mỗi lệnh đều chờ server trả về rồi mới gửi lệnh tiếp. Trong lúc phiên chạy:
+- **auto nhiệm vụ / tà thú tạm dừng**, xong phiên mới chạy tiếp;
+- đánh theo nhóm vẫn chạy, vì chỉ di chuyển;
+- xử lý chết được ưu tiên hơn hết. Đang chết thì phiên không chạy.
+
+**Món nào bị bán** (phải thỏa tất cả):
+
+| Điều kiện | Chi tiết |
+|---|---|
+| Loại | Trang phục (nón, áo, găng tay, quần, giày), trang sức (dây chuyền, nhẫn, ngọc bội, phù) hoặc vũ khí |
+| Chưa nâng cấp | Đồ +1 trở lên giữ lại (game cũng bắt tách trước khi bán) |
+| Không có dòng đặc biệt | Đồ có dòng khảm ngọc / trục luyện giữ lại |
+| Không khóa | Đồ khóa giữ lại |
+| **Ít dòng chỉ số hơn món cùng mẫu bán trong shop** | Chỉ so **số dòng**, không xét giá trị từng dòng. Bằng hoặc nhiều dòng hơn thì giữ |
+
+Mọi thứ khác **không bao giờ bị bán**: thời trang, đá, bình HP/MP, thức ăn, đồ nhiệm vụ, nguyên liệu, mẫu không có trong shop, và món mod chưa biết số dòng của bản shop.
+
+**Lấy số dòng của bản trong shop** (ngầm, không cần về làng, không bật cửa hàng lên màn hình):
+
+| Bước | Lệnh (giống game) |
+|---|---|
+| Tải danh sách hàng của cửa hàng có bán loại đồ đó | cmd -30 / -103 + mã danh sách, như bấm thẻ cửa hàng: vũ khí 2; dây chuyền 16, nhẫn 17, ngọc bội 18, phù 19; nón 20/21, áo 22/23, găng 24/25, quần 26/27, giày 28/29 (số chẵn = nam, lẻ = nữ) |
+| Xem chi tiết món cùng mẫu | cmd 42 + mã danh sách + ô, như bấm vào món trong shop |
+| Ghi nhớ | Số dòng theo mẫu được lưu trong PlayerPrefs `HVNJ_SHOP`, nên mỗi mẫu chỉ phải hỏi **một lần** |
+
+Khi cửa hàng chưa mở, game chỉ lưu dữ liệu về: `fp.boa` / `fp.bor` thoát ngay khi chưa dựng bảng shop.
+
+**Bán:** gửi cmd 14 (ô, số lượng) giống lệnh bán của game nhưng không mở hộp thoại. Server trả về số **yên** mới. Không đụng tới xu.
+
+**Không spam:**
+- Mỗi lệnh cách nhau ít nhất 0,5 giây và phải chờ server trả lời (tối đa 3 giây).
+- Một danh sách shop không về thì 5 phút sau mới xin lại.
+- 3 lệnh liên tiếp không được trả lời thì nghỉ 5 phút.
+- Hết món để bán thì 30 giây sau mới xét lại.
+
+**Xem trước:** dòng "Xem trước trang bị sẽ bán" trong menu Mod mở một menu liệt kê từng món, ví dụ `Áo vải: 2/4 dòng -> bán`, `Áo da: 4/3 dòng, giữ`. Mở menu này thì mod cũng lấy dần số dòng shop còn thiếu, kể cả khi chưa tick bán, Auto đang tắt hay hành trang chưa đầy. Menu này **không bán gì**. Bấm một dòng bất kỳ để xem lại.
+
+> ⚠️ **Chưa kiểm chứng trong game:** client không chặn tải danh sách shop, xem chi tiết hay bán khi đứng xa NPC, nhưng chưa biết server có chấp nhận không. Nếu server không trả lời thì mod tự nghỉ như trên. Số dòng được đếm giống nhau cho món trong hành trang và bản shop (mọi dòng trong dữ liệu món đồ); nên mở "Xem trước" để đối chiếu với số dòng thấy trong game trước khi bật bán.
+
 ### 🛒 Nút Shop luôn hiện ở mọi map
 Sửa cố định, **không có dòng tick**: cài mod là có.
 
@@ -234,16 +282,18 @@ Cách nhanh: chép `GameAssembly.dll` trong repo (đã cài mod) vào thư mục
 
 ## 🔧 Kỹ thuật
 
-- Code cave nằm trong 2 section mới ở cuối DLL:
+- Code cave nằm trong 3 section mới ở cuối DLL:
   - `.hvnj` (RX): code;
-  - `.hvnjd` (RW): cấu hình + trạng thái.
+  - `.hvnjd` (RW): cấu hình + trạng thái;
+  - `.hvnjp` (R): bảng `.pdata` (exception directory) của game + entry của mod. Bảng gốc chỉ còn chỗ cho 32 entry nên mod chuyển cả bảng sang section mới. Script dựng section này từ DLL gốc lúc cài, `.pdata` gốc giữ nguyên.
 - Không ghi vào code của game và chỉ dùng địa chỉ RIP-relative, nên an toàn với ASLR.
 - Mỗi cave đều có unwind info đăng ký trong `.pdata`. Cave chạy bên trong frame của hàm game dùng unwind dạng *chained* tới hàm đó. Nhờ vậy exception của game đi qua cave vẫn được xử lý bình thường thay vì làm game thoát.
 - **Mọi hook đều được cài, nhưng hành vi do cờ `cfg_*` trong `.hvnjd` quyết định lúc chạy.** Ngoại lệ duy nhất là nút Shop (`mo.dhn`), được sửa cố định theo yêu cầu. Các chỗ bản v2 sửa thẳng byte (đếm ngược khi chết, Thí Luyện, phần lõi chọn quái) nay là cave kiểm tra cờ: cờ tắt thì chạy đúng lệnh gốc của game.
 - Mã nguồn:
   - `mod_src/hvnj_caves.asm`: các cave, assemble bằng `ml64`;
   - `mod_src/hvnj_menu.c`: menu Mod và lưu / đọc lựa chọn, biên dịch bằng `cl` (không CRT, không bảng con trỏ tuyệt đối);
-  - `build_payload.py` ghép hai file `.obj` thành payload (cần Visual Studio có MSVC).
+  - `mod_src/hvnj_bag.c`: phiên dọn hành trang (bán trang bị thiếu dòng → luyện đá → cất rương), cùng quy ước;
+  - `build_payload.py` ghép các file `.obj` thành payload (cần Visual Studio có MSVC).
 - Menu dùng chính menu popup của game: tạo `List<iw>` + `iw(chữ, mã lệnh)`, hiện bằng `ms.dla`. Lệnh menu không có đối tượng xử lý riêng nên game gọi `mo.djh`; hook ở `iw.cgd` chuyển các mã `0x48560000+` cho mod, mã khác chuyển nguyên cho game.
 
 ```bash
@@ -259,6 +309,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
   - các hàm game được thay bằng callback Python;
   - nhân vật, hành trang và bảng điểm đá là dữ liệu giả;
   - kiểm tra packet gửi ra ở 24 tình huống, gồm cả chưa tick thì không luyện: chọn đá, chờ/gửi lại/nghỉ, đủ hay thiếu yên (có xu cũng không luyện), chỉ gửi cmd 20, leo cấp tới cấp đích rồi cất rương, rương chưa nạp/đầy/bị từ chối, gộp nhiều cấp, giới hạn 24 viên;
+- **chạy thật phiên dọn hành trang** (`bag_tick`) với shop và server giả, ở 15 tình huống: tải danh sách shop (nam / nữ, trang sức, vũ khí), xem chi tiết, bán đúng món thiếu dòng và giữ mọi món khác, nhớ số dòng vào `PlayerPrefs`, chờ / thử lại / nghỉ khi server không trả lời, không chạy khi chưa tick / tắt Auto / chưa đầy / đang chết, bán xong mới luyện đá, auto nhiệm vụ tạm dừng trong lúc dọn, menu Xem trước không bán gì;
 - **chạy thật mã máy auto nhiệm vụ** (`quest_tick`) với NPC, map và nhiệm vụ giả, ở 10 tình huống: chưa tick thì không làm gì, thứ tự nhận (ngày → tà thú), menu nhận tà thú, ưu tiên nhiệm vụ ngày, chờ tà thú xuất hiện, tắt Auto thì dừng;
 - gỡ được patch "0.3s" khỏi DLL cũ;
 - nâng cấp các DLL v2 cũ hoặc bản v3 dựng trước đó (`--old-v2`, nhiều file) lên bản menu hiện tại;
@@ -277,7 +328,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x1B9F11` | `mo.dgj` | lọc Tinh Anh/Thủ Lĩnh/Boss, cho phép đánh tất cả trong Thí Luyện |
 | `0x1BA48E` | `mo.dgl` | lọc quái của auto nhiệm vụ (trừ con tà thú của nhiệm vụ tà thú) |
 | `0x24B5AC` | `lm.clo` | chọn mục tiêu: theo trưởng nhóm, tự qua ải Thí Luyện |
-| `0x19495E` | `mo.ctq` | mỗi frame: luyện đá, chết - quay về, đánh theo nhóm, nhiệm vụ hàng ngày (sau `mo.dgd`) |
+| `0x19495E` | `mo.ctq` | mỗi frame (sau `mo.dgd`): chết - quay về, dọn hành trang (bán → luyện đá → cất rương), đánh theo nhóm, nhiệm vụ |
 | `0x1927E2`, `0x192912`, `0x3612E0`, `0x360946` | `mo.ctq`, `hw.cdy`, `hw.cdq` | bỏ đếm ngược khi chết (khi bật Chết - về làng) |
 | `0x19C061`, `0x477CBF` | `mo.dek`, `eq.bld` | Auto và tìm đường trong map 161 (khi bật Giữ Auto trong Thí Luyện) |
 | `0x4E6027` | `iw.cgd` | lệnh của menu Mod (`0x48560000+`) -> `mod_action`, còn lại -> `mo.djh` |

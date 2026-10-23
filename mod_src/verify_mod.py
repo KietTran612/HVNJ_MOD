@@ -18,9 +18,12 @@
  7. Chạy THẬT menu "Mod HVNJ" (hvnj_menu.c): hiện menu, tick, lưu / đọc PlayerPrefs,
     dòng "Mod HVNJ" trong menu nhân vật, lệnh của game vẫn tới mo.djh.
  8. Chạy THẬT stone_tick (luyện đá) với nhân vật / hành trang giả.
- 9. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
-10. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, lệnh cũ, restore.
-11. (--old-v2) Nâng cấp DLL v2 cũ (chọn tính năng bằng script) hoặc bản v3 dựng trước đó
+ 9. Chạy THẬT bag_tick (bán trang bị thiếu dòng -> luyện đá) với shop / server giả:
+    tải danh sách shop, xem chi tiết, bán, giữ đúng món, chờ / nghỉ khi server không trả lời,
+    thứ tự bán -> luyện đá, auto nhiệm vụ tạm dừng, menu Xem trước.
+10. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
+11. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, lệnh cũ, restore.
+12. (--old-v2) Nâng cấp DLL v2 cũ (chọn tính năng bằng script) hoặc bản v3 dựng trước đó
     lên bản menu hiện tại.
 """
 import argparse
@@ -49,8 +52,12 @@ spec.loader.exec_module(B)
 
 FAILS = []
 CFG_TOGGLES = ["cfg_mob", "cfg_die", "cfg_trial", "cfg_stage", "cfg_quest", "cfg_tathu", "cfg_party",
-               "cfg_stone"]             # thứ tự dòng tick trong menu (hvnj_menu.c)
+               "cfg_sell", "cfg_stone"]  # thứ tự dòng tick trong menu (hvnj_menu.c)
+PREVIEW_LINE = "Xem trước trang bị sẽ bán"   # dòng ngay sau tick "Tự bán trang bị"
+TOGGLE_NAMES = [n for n in P.MENU_ITEMS if n != PREVIEW_LINE][:len(CFG_TOGGLES)]
+T_SELL = CFG_TOGGLES.index("cfg_sell")
 ACT = 0x48560000                        # MOD_ACT_BASE
+ACT_PREVIEW = ACT + 14
 
 
 def check(cond, msg):
@@ -173,11 +180,11 @@ def test_legacy(orig, legacy_path):
 
 
 # ----------------------------------------------------------------------------- 3
-def test_pe(out):
+def test_pe(orig, out):
     print("[3] Cấu trúc PE")
     pe = B.PE(out)
     names = [s["name"] for s in pe.sections]
-    check(names[-2:] == [".hvnj", ".hvnjd"], f"section {names}")
+    check(names[-3:] == [".hvnj", ".hvnjd", ".hvnjp"], f"section {names}")
     for a, b in zip(pe.sections, pe.sections[1:]):
         check(a["va"] + B.align(max(a["vsize"], 1), B.SECTION_ALIGN) <= b["va"], f"VA chồng {a['name']}")
         check(a["raw"] + a["rsize"] <= b["raw"], f"raw chồng {a['name']}")
@@ -187,9 +194,18 @@ def test_pe(out):
     hv = pe.section(".hvnj")
     hd = pe.section(".hvnjd")
     check(hv["chars"] == 0x60000020 and hd["chars"] == 0xC0000040, "quyền section")
-    pd = pe.section(".pdata")
-    check(pe.exc_rva == pd["va"] and pe.exc_size <= pd["vsize"], ".pdata VirtualSize phủ exception dir")
+    # exception directory chuyển sang .hvnjp = bảng .pdata gốc nguyên vẹn + entry của payload
+    hp = pe.section(".hvnjp")
+    check(hp["chars"] == 0x40000040 and pe.exc_rva == hp["va"] and pe.exc_size == hp["vsize"],
+          ".hvnjp chỉ đọc và phủ đúng exception directory")
+    game = B.PE(orig).pdata()
     ents = pe.pdata()
+    check(ents[:len(game)] == game and len(ents) == len(game) + len(P.PAYLOAD_PDATA),
+          "exception directory = bảng .pdata của game + entry payload")
+    check(out[pe.section(".pdata")["raw"]:pe.section(".pdata")["raw"] + pe.section(".pdata")["rsize"]]
+          == orig[pe.section(".pdata")["raw"]:pe.section(".pdata")["raw"] + pe.section(".pdata")["rsize"]]
+          and out[pe.section(".pdata")["hdr"]:pe.section(".pdata")["hdr"] + 40]
+          == orig[pe.section(".pdata")["hdr"]:pe.section(".pdata")["hdr"] + 40], "section .pdata gốc không bị sửa")
     check(all(a[0] < b[0] and a[1] <= b[0] for a, b in zip(ents, ents[1:])), ".pdata sắp xếp, không chồng")
     for e in ents[-len(P.PAYLOAD_PDATA):]:
         check(hv["va"] <= e[0] < e[1] <= hv["va"] + hv["vsize"], f"pdata ngoài .hvnj {e}")
@@ -301,7 +317,9 @@ def test_disasm(orig, out):
             for op in ins.operands:
                 if op.type == capstone.x86.X86_OP_MEM and op.mem.base == capstone.x86.X86_REG_RIP:
                     t = ins.address + ins.size + op.mem.disp
-                    check(code_lo <= t < code_hi or data_lo <= t < data_hi or t in allowed_mem,
+                    # cl lấy mảng tĩnh bằng "lea r, __ImageBase" + [r + chỉ số + RVA] (ADDR32NB): vẫn độc lập ASLR
+                    image_base = ins.mnemonic == "lea" and t == B.GAME_SYMBOLS["__ImageBase"]
+                    check(code_lo <= t < code_hi or data_lo <= t < data_hi or t in allowed_mem or image_base,
                           f"{start}: truy cập bộ nhớ lạ {t:#x} tại {ins.address:#x}")
             if in_host:
                 writes_rsp = bool(ins.operands) and ins.operands[0].type == capstone.x86.X86_OP_REG \
@@ -509,6 +527,7 @@ class CaveSim:
         self.array_news, self.class_inits, self.init_md = [], [], []
         self.dga, self.dgf, self.walks, self.menus = [], [], [], []
         self.lists, self.iws, self.shown, self.prefs, self.djh = {}, {}, [], {}, []
+        self.cih = {}                    # jr -> 1: có dòng khảm ngọc / trục luyện
         G = B.GAME_SYMBOLS
         self.cbs = {
             "lm_cua": F(U64, U64)(lambda _mi: self.char),
@@ -546,6 +565,9 @@ class CaveSim:
                 lambda _ms, lst, *_a: self.shown.append([self.iws[i] for i in self.lists[lst]]) or 0),
             "mo_djh": F(U64, U64, U64, U64, U64)(
                 lambda mo, act, p, _mi: self.djh.append((mo, act & 0xFFFFFFFF, p)) or 0),
+            # phiên dọn hành trang (hvnj_bag.c)
+            "bl_bbb": F(U64, U64, U64, U64)(self._bl_bbb),
+            "jr_cih": F(U64, U64, U64)(lambda it, _mi: self.cih.get(it, 0)),
         }
         self.cb_time = F(None, U64)(lambda p: setattr(U64.from_address(p), "value", self.now * 10000))
         for name_, cb in self.cbs.items():
@@ -555,7 +577,7 @@ class CaveSim:
                   struct.pack("<Q", ctypes.cast(self.cb_time, ctypes.c_void_p).value))
         # class giả: +133h cờ cctor, +0B8h static fields
         self.statics = {}
-        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo", "lm", "list_iw", "iw"):
+        for k in ("ca", "hw", "ek", "mc", "jr_array", "bc", "hs", "mb", "mo", "lm", "list_iw", "iw", "fp"):
             klass = self.alloc(0x140)
             st = self.alloc(0x200)
             self.w64(klass + 0xB8, st)
@@ -577,6 +599,7 @@ class CaveSim:
         self.session = self.alloc(0x40)
         self.w64(self.service + 0x10, self.session)
         self.fn = F(None)(self.base + P.PAYLOAD_SYMBOLS["stone_tick"])
+        self.bag_fn = F(ctypes.c_int32, ctypes.c_int64)(self.base + P.PAYLOAD_SYMBOLS["bag_tick"])
         # quest_tick: mo (GameScr), NPC 25 có vtable kk.cit()/ciu() trả toạ độ
         self.mo = self.alloc(0x400)
         self.qfn = F(None, U64)(self.base + P.PAYLOAD_SYMBOLS["quest_tick"])
@@ -669,10 +692,38 @@ class CaveSim:
             ctypes.c_int32.from_address(arr + 0x20 + 4 * i).value = v
         self.w64(self.statics["mc"] + off, arr)
 
+    def make_opts(self, n):
+        """List<jw> giả: chỉ cần _size (+18h) = số dòng chỉ số."""
+        lst = self.alloc(0x20)
+        self.w32(lst + 0x18, n)
+        return lst
+
+    def make_equip(self, index, id, type, lines, lock=0, up=0, qty=1, name="Đồ", cih=0, sel=0):
+        """Trang bị: mẫu (id, loại, tên), lines = số dòng chỉ số (None = chưa có List<jw>)."""
+        tpl = self.alloc(0x30)
+        self.w16(tpl + 0x10, id)
+        self.w8(tpl + 0x12, type)
+        self.w64(tpl + 0x18, self.make_str(name))
+        it = self.alloc(0x60)
+        self.w64(it + 0x10, tpl)
+        if lines is not None:
+            self.w64(it + 0x18, self.make_opts(lines))
+        self.w32(it + 0x28, index)
+        self.w32(it + 0x2C, qty)
+        self.w8(it + 0x38, lock)
+        self.w32(it + 0x40, up)
+        self.w8(it + 0x5E, sel)
+        if cih:
+            self.cih[it] = 1
+        return it
+
     def make_item(self, spec, index):
-        """spec: None = ô trống, 'eq' = trang bị, (id, khóa, đang chọn) hoặc id = đá (id 0 = cấp 1)."""
+        """spec: None = ô trống, 'eq' = trang bị, (id, khóa, đang chọn) hoặc id = đá (id 0 = cấp 1),
+        dict = trang bị cho phiên bán (tham số của make_equip)."""
         if spec is None:
             return 0
+        if isinstance(spec, dict):
+            return self.make_equip(index, **spec)
         tpl = self.alloc(0x20)
         it = self.alloc(0x60)
         if spec == "eq":
@@ -726,7 +777,40 @@ class CaveSim:
         for i in slots:
             self.set_slot(i, None)
 
+    # --- cửa hàng (fp static jr[] theo mã danh sách)
+    SHOP_OFF = {2: 0x78, **{t: 0x58 + (t - 16) * 8 for t in range(16, 20)},
+                **{t: 0x08 + (t - 20) * 8 for t in range(20, 30)}}
+
+    def set_shop(self, ui, items):
+        """Server gửi danh sách hàng mã ui: items = [(mẫu, số dòng hoặc None = chưa xem chi tiết)]."""
+        arr = self.alloc(0x20 + 8 * max(len(items), 1))
+        self.w64(arr + 0x18, len(items))
+        for i, (tid, lines) in enumerate(items):
+            it = self.make_equip(i, tid, 0, lines)
+            self.w32(it + 0x58, ui)
+            self.w64(arr + 0x20 + 8 * i, it)
+        self.w64(self.statics["fp"] + self.SHOP_OFF[ui], arr)
+
+    def shop_info(self, ui, index, lines):
+        """Server trả chi tiết món thứ index của danh sách ui."""
+        arr = ctypes.c_uint64.from_address(self.statics["fp"] + self.SHOP_OFF[ui]).value
+        self.w64(self.slot(arr, index) + 0x18, self.make_opts(lines))
+
+    def set_status(self, st):
+        ctypes.c_int32.from_address(self.char + 0x5C).value = st
+
+    def btick(self, dt_ms=250):
+        """Chạy bag_tick(now) sau dt_ms; trả về (giá trị trả về, packet gửi ra)."""
+        self.now += dt_ms
+        n = len(self.sends)
+        r = self.bag_fn(self.now)
+        return r, self.sends[n:]
+
     # --- callback thay hàm game
+    def _bl_bbb(self, writer, value, _mi):
+        self.msgs[self.writers[writer]]["idx"].append(("int", value & 0xFFFFFFFF))
+        return 0
+
     def _array_new(self, klass, n):
         self.array_news.append((klass, n))
         return self.alloc(0x20 + 8 * n)
@@ -904,15 +988,25 @@ def test_menu(orig, out):
         print("    bỏ qua (không phải Windows)")
         return
     s = CaveSim(kernel32(), out, "menu")
+    NT = len(CFG_TOGGLES)
+    STONE_LINES = NT + 1                # chỉ số dòng "Luyện đá lên cấp" (sau các tick + dòng Xem trước)
     try:
         def state():
             return [s.get_cfg(k) for k in CFG_TOGGLES]
 
         def pref(t, accept=0, lo=0, hi=0):
-            return "4" + "".join("1" if x else "0" for x in t) + chr(97 + accept) + chr(97 + lo) + chr(97 + hi)
+            return "5" + "".join("1" if x else "0" for x in t) + chr(97 + accept) + chr(97 + lo) + chr(97 + hi)
+
+        def pref4(t8, accept=0, lo=0, hi=0):
+            """Chuỗi của bản trước: 8 tick, luyện đá ở vị trí 7, chưa có bán trang bị."""
+            return "4" + "".join("1" if x else "0" for x in t8) + chr(97 + accept) + chr(97 + lo) + chr(97 + hi)
 
         def menu_ok(menu, t, accept=0, lo=0, hi=0):
-            want = [(("[x] " if on else "[   ] ") + P.MENU_ITEMS[i], ACT + 1 + i) for i, on in enumerate(t)]
+            want = []
+            for i, on in enumerate(t):
+                want.append((("[x] " if on else "[   ] ") + TOGGLE_NAMES[i], ACT + 1 + i))
+                if i == T_SELL:
+                    want.append((PREVIEW_LINE, ACT_PREVIEW))
             if hi:
                 want += [(f"Luyện đá lên cấp: {hi} (cất vào rương)", ACT + 10), (f"Luyện đá từ cấp: {lo}", ACT + 11)]
             else:
@@ -928,31 +1022,31 @@ def test_menu(orig, out):
               f"menu nhân vật phải có thêm dòng Mod HVNJ và trả về ms.dkz(): {[s.iws.get(i) for i in s.lists[lst]]}")
         # mở menu: mặc định tắt hết, chưa lưu gì
         s.action(ACT)
-        check(len(s.shown) == 1 and menu_ok(s.shown[-1], [0] * 8) and not s.prefs,
+        check(len(s.shown) == 1 and menu_ok(s.shown[-1], [0] * NT) and not s.prefs,
               f"mở menu: {s.shown[-1] if s.shown else None} {s.prefs}")
         # tick từng dòng
         check(not any("xu" in c.split() for c, _a in s.shown[-1]), "menu không còn dòng trả bằng xu")
-        t = [0] * 8
-        for i in range(8):
+        t = [0] * NT
+        for i in range(NT):
             s.action(ACT + 1 + i)
             t[i] = 1
             check(state() == t and s.prefs.get("HVNJ_MOD") == pref(t) and menu_ok(s.shown[-1], t),
-                  f"tick dòng {i + 1}: cfg {state()} prefs {s.prefs.get('HVNJ_MOD')} menu {s.shown[-1][i]}")
+                  f"tick dòng {i + 1}: cfg {state()} prefs {s.prefs.get('HVNJ_MOD')} menu {s.shown[-1]}")
         s.action(ACT + 1)
         t[0] = 0
         check(state() == t and s.prefs["HVNJ_MOD"] == pref(t), "bỏ tick dòng 1")
         # bỏ tick thì xoá trạng thái dở dang
-        s.set_cfg(q_engaged=1, r_pending=1, s_active=1, p_active=1)
-        for i in (1, 4, 6, 7):
+        s.set_cfg(q_engaged=1, r_pending=1, s_active=1, p_active=1, sl_state=1)
+        for i in (1, 4, 6, T_SELL, CFG_TOGGLES.index("cfg_stone")):
             s.action(ACT + 1 + i)
             s.action(ACT + 1 + i)
-        check([s.get_cfg(k) for k in ("q_engaged", "r_pending", "s_active", "p_active")] == [0, 0, 0, 0],
+        check([s.get_cfg(k) for k in ("q_engaged", "r_pending", "s_active", "p_active", "sl_state")] == [0] * 5,
               "tick / bỏ tick xoá trạng thái đang chạy của tính năng")
         # cấp đá: mọi cấp -> 2 .. 12 -> mọi cấp; từ cấp vòng 1 .. cấp đích - 1
         for _ in range(5):
             s.action(ACT + 10)
         check((s.get_cfg("cfg_stone_lo"), s.get_cfg("cfg_stone_hi")) == (1, 6) and menu_ok(s.shown[-1], t, 0, 1, 6),
-              f"lên cấp 6: {s.shown[-1][9:]}")
+              f"lên cấp 6: {s.shown[-1][STONE_LINES:]}")
         s.action(ACT + 11)
         s.action(ACT + 11)
         check(s.get_cfg("cfg_stone_lo") == 3 and s.prefs["HVNJ_MOD"] == pref(t, 0, 3, 6), "từ cấp 3")
@@ -972,6 +1066,15 @@ def test_menu(orig, out):
         n_shown = len(s.shown)
         s.action(ACT + 13)
         check(len(s.shown) == n_shown and s.prefs["HVNJ_MOD"] == saved, "Đóng: không mở lại, không lưu")
+        # Xem trước: mở menu thứ hai (chưa vào game / hành trang trống), không lưu gì
+        s.action(ACT_PREVIEW)
+        pv = s.shown[-1]
+        check(len(s.shown) == n_shown + 1 and s.prefs["HVNJ_MOD"] == saved
+              and pv[0] == ("Sẽ bán: 0 / 0 món (bấm để xem lại)", ACT_PREVIEW)
+              and pv[-2:] == [("Quay lại", ACT), ("Đóng", ACT + 13)], f"Xem trước: {pv}")
+        s.action(ACT)
+        check(menu_ok(s.shown[-1], t, 1), "Quay lại: về menu Mod")
+        n_shown = len(s.shown)
         # lệnh của game vẫn tới mo.djh nguyên tham số
         s.action(1007, p=0x77)
         s.action(ACT + 32, p=0x78)
@@ -979,27 +1082,36 @@ def test_menu(orig, out):
               f"lệnh của game chuyển nguyên cho mo.djh: {s.djh}")
         # đọc lại PlayerPrefs khi vào game
         load = F(None)(s.sym("mod_cfg_load"))
-        s.prefs["HVNJ_MOD"] = pref([1, 0, 1, 0, 1, 0, 1, 1], 2, 3, 7)
+        want = [1, 0, 1, 0, 1, 0, 1, 1, 1]
+        s.prefs["HVNJ_MOD"] = pref(want, 2, 3, 7)
         s.set_cfg(m_loaded=0, **{k: 0 for k in CFG_TOGGLES})
         load()
-        check(state() == [1, 0, 1, 0, 1, 0, 1, 1] and s.get_cfg("m_loaded") == 1
+        check(state() == want and s.get_cfg("m_loaded") == 1
               and [s.get_cfg(k) for k in ("cfg_accept", "cfg_stone_lo", "cfg_stone_hi")] == [2, 3, 7],
               f"đọc PlayerPrefs: {state()}")
+        # chuỗi "4..." của bản trước: 8 tick, luyện đá ở vị trí 7 -> chuyển sang vị trí mới, chưa bật bán
+        s.prefs["HVNJ_MOD"] = pref4([1, 0, 1, 0, 1, 0, 1, 1], 1, 2, 5)
+        s.set_cfg(**{k: 0 for k in CFG_TOGGLES})
+        load()
+        check(state() == [1, 0, 1, 0, 1, 0, 1, 0, 1]
+              and [s.get_cfg(k) for k in ("cfg_accept", "cfg_stone_lo", "cfg_stone_hi")] == [1, 2, 5],
+              f"đọc chuỗi '4' của bản trước: {state()}")
         # "3..." = chuỗi của bản có dòng "trả bằng xu": bỏ qua
-        for bad in ("3" + pref([1] * 8)[1:] + "a", pref([1] * 8)[:-1], "", pref([1] * 8, 0, 5, 1)):
+        for bad in ("3" + pref4([1] * 8)[1:] + "a", pref([1] * NT)[:-1], "", pref([1] * NT, 0, 5, 1)):
             s.prefs["HVNJ_MOD"] = bad
             s.set_cfg(**{k: 0 for k in CFG_TOGGLES}, cfg_stone_lo=4, cfg_stone_hi=9)
             load()
-            if bad.startswith("4") and len(bad) == 12:
-                check(state() == [1] * 8 and (s.get_cfg("cfg_stone_lo"), s.get_cfg("cfg_stone_hi")) == (4, 9),
+            if bad.startswith("5") and len(bad) == NT + 4:
+                check(state() == [1] * NT and (s.get_cfg("cfg_stone_lo"), s.get_cfg("cfg_stone_hi")) == (4, 9),
                       f"cấp đá sai trong PlayerPrefs phải bị bỏ qua: {bad}")
             else:
-                check(state() == [0] * 8, f"chuỗi PlayerPrefs sai phải bị bỏ qua: {bad!r}")
+                check(state() == [0] * NT, f"chuỗi PlayerPrefs sai phải bị bỏ qua: {bad!r}")
         # quest_tick tự đọc PlayerPrefs ở frame đầu tiên
-        s.prefs["HVNJ_MOD"] = pref([0, 0, 0, 0, 0, 1, 0, 0])
+        want = [0, 0, 0, 0, 0, 1, 0, 0, 0]
+        s.prefs["HVNJ_MOD"] = pref(want)
         s.set_cfg(m_loaded=0, **{k: 0 for k in CFG_TOGGLES})
         s.qtick(1000)
-        check(s.get_cfg("m_loaded") == 1 and state() == [0, 0, 0, 0, 0, 1, 0, 0], "quest_tick đọc PlayerPrefs")
+        check(s.get_cfg("m_loaded") == 1 and state() == want, "quest_tick đọc PlayerPrefs")
     finally:
         s.close()
 
@@ -1208,8 +1320,230 @@ def test_stone_logic(orig):
     print(f"    {n_cases} tình huống")
 
 
+def pk(send):
+    """Packet gửi ra -> (cmd có dấu, [byte & 0xFF | ('int', v)])."""
+    cmd = send["cmd"] - 256 if send["cmd"] >= 128 else send["cmd"]
+    return cmd, [v if isinstance(v, tuple) else v & 0xFF for v in send["idx"]]
+
+
+def test_sell_logic(orig):
+    print("[9] Chạy thật phiên dọn hành trang (bán trang bị thiếu dòng -> luyện đá) với shop / server giả")
+    if os.name != "nt":
+        print("    bỏ qua (không phải Windows)")
+        return
+    k32 = kernel32()
+    out = P.build(orig)
+    n_cases = 0
+    LIST = lambda ui: (-30, [0x99, ui])                         # noqa: E731 - như bấm thẻ cửa hàng
+    INFO = lambda ui, i: (42, [ui, i])                           # noqa: E731 - như bấm vào món trong shop
+    SELL = lambda slot, n=1: (14, [slot, ("int", n)])            # noqa: E731
+    AO = dict(id=100, type=2, lines=2, name="Áo vải")            # shop bán áo 100 có 4 dòng
+
+    def sim(name, **cfg):
+        nonlocal n_cases
+        n_cases += 1
+        return CaveSim(k32, out, "sell_" + name, cfg=dict({"cfg_sell": 1}, **cfg))
+
+    def i32(s, name):
+        return ctypes.c_int32.from_address(s.sym(name)).value
+
+    def nxt(s, max_ms=6000):
+        """Chạy bag_tick tới khi có packet (tối đa max_ms); trả về packet hoặc None."""
+        for _ in range(max_ms // 250):
+            sends = s.btick(250)[1]
+            if sends:
+                check(len(sends) == 1, f"mỗi lần chỉ được gửi 1 lệnh: {[pk(x) for x in sends]}")
+                return pk(sends[0])
+        return None
+
+    def run(s, ms, dt=250):
+        got = []
+        for _ in range(ms // dt):
+            got += [pk(x) for x in s.btick(dt)[1]]
+        return got
+
+    # 1. đủ quy trình: tải danh sách shop -> xem chi tiết món -> bán, nhớ số dòng vào PlayerPrefs
+    s = sim("flow")
+    try:
+        s.set_bag([AO, 5, 5, 5, 5, None])
+        check(nxt(s) == LIST(22), "áo (loại 2): tải danh sách trang phục nam (22) trước")
+        check(run(s, 2000) == [], "chưa có danh sách: chờ server, không gửi thêm")
+        s.set_shop(22, [(101, None), (100, None)])
+        check(nxt(s) == INFO(22, 1), "có danh sách: xem chi tiết đúng món cùng mẫu trong shop")
+        s.shop_info(22, 1, 4)
+        p = nxt(s)
+        check(p == SELL(0), f"áo 2 dòng < shop 4 dòng: bán ô 0 ({p})")
+        check(s.prefs.get("HVNJ_SHOP") == "1100:4;", f"nhớ số dòng shop: {s.prefs.get('HVNJ_SHOP')}")
+        check(run(s, 2000) == [] and s.get_cfg("sl_state") == 1, "chờ server bán xong mới làm tiếp")
+        s.set_slot(0, None)
+        rest = run(s, 3000)
+        check(rest == [] and s.get_cfg("sl_state") == 0 and i32(s, "sl_sold") == 1,
+              f"bán xong, hết món: kết thúc phiên ({rest}, đã bán {i32(s, 'sl_sold')})")
+    finally:
+        s.close()
+
+    # 2. chỉ bán đúng món thiếu dòng; giữ mọi món còn lại
+    s = sim("keep")
+    try:
+        s.prefs["HVNJ_SHOP"] = "1100:4;"
+        s.set_shop(22, [(100, 4)])
+        s.set_shop(23, [(200, 3)])
+        keep = [dict(AO, lines=4), dict(AO, lines=5), dict(AO, lines=1, up=1), dict(AO, lines=1, lock=1),
+                dict(AO, lines=1, cih=1), dict(AO, lines=1, sel=1), dict(AO, lines=None), 3,
+                dict(AO, type=11, lines=1), dict(AO, type=16, lines=1), dict(AO, id=999, lines=1)]
+        s.set_bag(keep + [dict(AO, lines=3), None])
+        check(nxt(s) == SELL(len(keep)), "chỉ bán áo 3 dòng; giữ đủ dòng, nhiều dòng hơn, đã nâng cấp, khóa, "
+                                         "khảm ngọc, đang chọn, chưa có dòng, đá, loại khác, mẫu không có trong shop")
+        s.set_slot(len(keep), None)
+        check(run(s, 5000) == [] and s.get_cfg("sl_state") == 0, "không bán thêm món nào")
+    finally:
+        s.close()
+
+    # 3. vũ khí (danh sách 2) và trang sức (nhẫn loại 5 -> danh sách 17)
+    s = sim("weapon_ring")
+    try:
+        s.set_bag([dict(id=300, type=1, lines=1, name="Kiếm"), dict(id=400, type=5, lines=1, name="Nhẫn"), None])
+        check(nxt(s) == LIST(2), "vũ khí: danh sách 2")
+        s.set_shop(2, [(300, 3)])
+        check(nxt(s) == SELL(0), "kiếm 1 dòng < 3: bán (chi tiết đã có thì khỏi xem lại)")
+        s.set_slot(0, None)
+        check(nxt(s) == LIST(17), "nhẫn: danh sách trang sức 17")
+        s.set_shop(17, [(400, 2)])
+        check(nxt(s) == SELL(1), "nhẫn 1 dòng < 2: bán")
+    finally:
+        s.close()
+
+    # 4. trang phục nữ: không có trong danh sách nam (24) thì tải danh sách nữ (25)
+    s = sim("female")
+    try:
+        s.set_bag([dict(id=500, type=4, lines=1, name="Găng"), None])
+        check(nxt(s) == LIST(24), "găng: danh sách nam 24")
+        s.set_shop(24, [(501, 2)])
+        check(nxt(s) == LIST(25), "không có ở danh sách nam -> danh sách nữ 25")
+        s.set_shop(25, [(500, 3)])
+        check(nxt(s) == SELL(0), "găng nữ 1 dòng < 3: bán")
+    finally:
+        s.close()
+
+    # 5. server không trả danh sách: không xin lại danh sách đó trong 5 phút
+    s = sim("list_timeout")
+    try:
+        s.set_bag([AO, None])
+        got = run(s, 4 * 60_000, 1000)
+        check(got == [LIST(22), LIST(23)], f"danh sách không về: mỗi danh sách chỉ xin 1 lần trong 4 phút ({got})")
+        got = run(s, 2 * 60_000, 1000)
+        check(got[:2] == [LIST(22), LIST(23)], f"5 phút sau xin lại ({got})")
+    finally:
+        s.close()
+
+    # 6. server không bán: thử lại khi hết hạn chờ 3s, 3 lần liên tiếp thì nghỉ 5 phút
+    s = sim("sell_timeout")
+    try:
+        s.prefs["HVNJ_SHOP"] = "1100:4;"
+        s.set_bag([AO, None])
+        got = run(s, 60_000)
+        check(got == [SELL(0)] * 3, f"bán không được: thử 3 lần rồi nghỉ ({got})")
+        check(run(s, 3 * 60_000, 1000) == [], "đang nghỉ 5 phút: không gửi gì")
+        got = run(s, 2 * 60_000, 1000)
+        check(got[:1] == [SELL(0)], f"hết 5 phút: thử lại ({got})")
+    finally:
+        s.close()
+
+    # 7. không chạy khi: chưa tick, Auto tắt, hành trang chưa đầy, nhân vật chết
+    for name, setup in (("off", lambda s: s.set_cfg(cfg_sell=0)), ("auto_off", lambda s: s.set_auto(False)),
+                        ("not_full", lambda s: s.set_bag([AO, None, None])), ("dead", lambda s: s.set_status(14))):
+        s = sim(name)
+        try:
+            s.prefs["HVNJ_SHOP"] = "1100:4;"
+            s.set_bag([AO, None])
+            setup(s)
+            r, got = 0, []
+            for _ in range(40):
+                r2, sends = s.btick(250)
+                r |= r2
+                got += sends
+            check(not got and not r, f"{name}: không bán, không chiếm lượt ({[pk(x) for x in got]}, {r})")
+        finally:
+            s.close()
+
+    # 8. chuỗi HVNJ_SHOP sai bị bỏ qua (coi như chưa biết số dòng -> xin danh sách)
+    s = sim("bad_cache")
+    try:
+        s.prefs["HVNJ_SHOP"] = "2100:4;"
+        s.set_bag([AO, None])
+        check(nxt(s) == LIST(22), "chuỗi lưu sai phiên bản: bỏ qua")
+    finally:
+        s.close()
+
+    # 9. thứ tự: bán xong mới luyện đá (luyện ngay cả khi bán đã làm trống chỗ), không xen kẽ
+    s = sim("then_stone", cfg_stone=1)
+    try:
+        s.prefs["HVNJ_SHOP"] = "1100:4;"
+        s.set_bag([AO, 0, 0, 0, 0, None])
+        busy, cmds = [], []
+        for _ in range(8):
+            r, sends = s.btick(250)
+            busy.append(r)
+            cmds += [pk(x)[0] for x in sends]
+        check(cmds == [14] and all(busy), f"bán trước, chưa luyện khi chưa bán xong ({cmds}, {busy})")
+        s.set_slot(0, None)
+        for _ in range(12):
+            cmds += [pk(x)[0] for x in s.btick(250)[1]]
+        check(cmds == [14, 20], f"bán xong -> luyện đá ngay: {cmds}")
+        check(s.btick(250)[0] == 1, "đang luyện đá: phiên dọn hành trang vẫn bận")
+    finally:
+        s.close()
+
+    # 10. chưa tick bán: luyện đá chạy như cũ qua bag_tick
+    s = sim("stone_only", cfg_sell=0, cfg_stone=1)
+    try:
+        s.set_bag([0, 0, 0, 0, None])
+        got = [pk(x) for x in s.btick(1000)[1]]
+        check(got == [(20, [0, 1, 2, 3])], f"chỉ luyện đá: {got}")
+    finally:
+        s.close()
+
+    # 11. đang dọn hành trang thì auto nhiệm vụ tạm dừng, xong thì chạy tiếp
+    s = sim("quest_pause", cfg_quest=1)
+    try:
+        s.prefs["HVNJ_SHOP"] = "1100:4;"
+        s.set_bag([AO, None])
+        _d, menus, _f = s.engage()
+        menus += s.qtick(500)[1]
+        check(not menus and [pk(x) for x in s.sends] == [SELL(0)], f"đang bán: chưa nhận nhiệm vụ ({menus})")
+        s.set_slot(0, None)
+        for _ in range(4):
+            menus += s.qtick(500)[1]
+        check(menus == [(25, 0, 0)], f"bán xong: auto nhiệm vụ chạy tiếp ({menus})")
+    finally:
+        s.close()
+
+    # 12. Xem trước (menu): Auto tắt, chưa tick, hành trang chưa đầy -> chỉ lấy số dòng, không bán
+    s = sim("preview", cfg_sell=0)
+    try:
+        s.set_auto(False)
+        s.set_bag([AO, dict(AO, id=101, lines=4, name="Áo da"), None, None])
+        s.action(ACT_PREVIEW)
+        pv = [c for c, _a in s.shown[-1]]
+        check(pv[:4] == ["Sẽ bán: 0 / 2 món (bấm để xem lại)", "Đang lấy số dòng từ shop...",
+                         "Áo vải: 2 dòng, chưa biết số dòng shop, giữ", "Áo da: 4 dòng, chưa biết số dòng shop, giữ"],
+              f"xem trước lúc chưa biết: {pv}")
+        check(nxt(s) == LIST(22), "xem trước: tải danh sách")
+        s.set_shop(22, [(100, None), (101, 3)])
+        check(nxt(s) == INFO(22, 0), "xem trước: xem chi tiết món chưa biết")
+        s.shop_info(22, 0, 4)
+        check(run(s, 5000) == [] and s.get_cfg("sl_state") == 0, "xem trước: không bán gì, xong thì dừng")
+        s.action(ACT_PREVIEW)
+        pv = [c for c, _a in s.shown[-1]]
+        check(pv[:3] == ["Sẽ bán: 1 / 2 món (bấm để xem lại)", "Áo vải: 2/4 dòng -> bán", "Áo da: 4/3 dòng, giữ"],
+              f"xem trước khi đã biết: {pv}")
+    finally:
+        s.close()
+    print(f"    {n_cases} tình huống")
+
+
 def test_quest_logic(orig):
-    print("[9] Chạy thật quest_tick (nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ giả")
+    print("[10] Chạy thật quest_tick (nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ giả")
     if os.name != "nt":
         print("    bỏ qua (không phải Windows)")
         return
@@ -1319,7 +1653,7 @@ def test_quest_logic(orig):
 
 # ----------------------------------------------------------------------------- 10
 def test_cli(orig, legacy_path):
-    print("[10] CLI trên bản sao")
+    print("[11] CLI trên bản sao")
     td = tempfile.mkdtemp()
     dll = os.path.join(td, "GameAssembly.dll")
     script = os.path.join(ROOT, "patch_skill_delay.py")
@@ -1374,7 +1708,7 @@ def test_cli(orig, legacy_path):
 def test_old_payload(paths):
     """DLL v2 (chọn tính năng bằng script) hoặc bản menu v3 dựng trước đó -> nhận diện, khôi phục,
     nâng cấp lên bản menu hiện tại."""
-    print("[11] Nâng cấp từ DLL cũ (v2 / v3 trước)")
+    print("[12] Nâng cấp từ DLL cũ (v2 / v3 trước)")
     for old_path in paths:
         old = open(old_path, "rb").read()
         kind, on = P.detect(old)
@@ -1405,12 +1739,13 @@ def main():
         sys.exit(f"{args.original} không phải bản gốc")
     out = test_install(orig)
     test_legacy(orig, args.legacy)
-    test_pe(out)
+    test_pe(orig, out)
     test_disasm(orig, out)
     test_runtime(out)
     test_gates(orig, out)
     test_menu(orig, out)
     test_stone_logic(orig)
+    test_sell_logic(orig)
     test_quest_logic(orig)
     test_cli(orig, args.legacy)
     if args.old_v2:

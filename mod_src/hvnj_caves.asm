@@ -52,6 +52,7 @@ EXTERN ms_dkz:PROC              ; static ms ms.dkz() - menu popup chung
 EXTERN mod_cfg_load:PROC        ; doc lua chon tu PlayerPrefs (1 lan)
 EXTERN mod_action:PROC          ; int mod_action(int action) - xu ly lenh cua menu Mod
 EXTERN mod_menu_add_entry:PROC  ; void mod_menu_add_entry(List<iw>* list) - them dong "Mod HVNJ"
+EXTERN bag_tick:PROC            ; int bag_tick(long long now) - phien don hanh trang (hvnj_bag.c)
 
 ; ---- Con tro TypeInfo (Il2CppClass*), static fields o +0B8h -----------------
 EXTERN ca_TypeInfo:QWORD        ; ca.fxf (+16h) = trang thai nut Auto
@@ -91,7 +92,7 @@ PUBLIC ctq_cd1, ctq_cd1_end, ctq_cd2, ctq_cd2_end, cdy_dlg, cdy_dlg_end, cdq_dlg
 PUBLIC dek_trial, dek_trial_end, bld_trial, bld_trial_end, dgj_core1, dgj_core1_end, dgj_core2, dgj_core2_end
 PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick, action_hook, menuchar_hook
 PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone
-PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu, cfg_trial, m_loaded
+PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu, cfg_trial, cfg_sell, m_loaded
 PUBLIC q_engaged, r_pending, r_active, p_active, st_party_map, st_empty_since, s_active, s_wait_until, s_fails
 
 ; ---- Offset field (tu il2cpp dump) -----------------------------------------
@@ -191,6 +192,7 @@ cfg_stone_lo    DB 0            ; --stone-levels A-B: dung da tu cap A, luyen le
 cfg_stone_hi    DB 0            ;   (da cap B cat vao ruong); 0 = moi cap, khong cat ruong
 cfg_tathu       DB 0            ; 1 = auto nhiem vu ta thu (cung vong lap voi auto nhiem vu ngay)
 cfg_trial       DB 0            ; 1 = giu Auto & tim duong trong Thi Luyen (map 161)
+cfg_sell        DB 0            ; 1 = tu ban trang bi thieu dong khi hanh trang day (hvnj_bag.c)
 m_loaded        DB 0            ; 1 = da doc lua chon tu PlayerPrefs
 ALIGN 8
 st_map          DD 0
@@ -621,8 +623,10 @@ clo_stage_end LABEL NEAR
 
 ; -----------------------------------------------------------------------------
 ; Goi tu mo.ctq thay cho "call mo.dgd". rcx = mo (this).
-; Luyen da (stone_tick) chay doc lap. Danh theo nhom (party_tick) chay truoc
-; auto nhiem vu; khi dang di theo truong nhom thi auto nhiem vu tam dung.
+; Thu tu moi frame: chet - quay ve (uu tien hon het) -> phien don hanh trang
+; (bag_tick: ban trang bi thieu dong -> luyen da -> cat ruong, moi luc mot viec)
+; -> danh theo nhom -> auto nhiem vu. Dang don hanh trang hoac dang di theo
+; truong nhom thi auto nhiem vu tam dung.
 ; Auto nhiem vu hang ngay dua tren pipeline "tu dong lam nhiem vu" cua game:
 ;   - Nguoi choi bat Auto (canh len cua ca.fxf) ngoai Thi Luyen -> kich hoat.
 ;   - Chua co nhiem vu ngay: ve truong theo he phai, toi NPC 25, gui
@@ -665,10 +669,6 @@ quest_tick PROC FRAME
     jne     q_cfg_ready
     call    mod_cfg_load                ; lan dau: doc lua chon menu Mod tu PlayerPrefs
 q_cfg_ready:
-    cmp     byte ptr [cfg_stone], 0
-    je      q_no_stone
-    call    stone_tick
-q_no_stone:
     cmp     byte ptr [cfg_die], 0
     je      q_no_die
     mov     rcx, rbx
@@ -676,12 +676,23 @@ q_no_stone:
     test    eax, eax
     jnz     q_resync_auto               ; dang xu ly chet / quay ve map cu
 q_no_die:
+    lea     rcx, [rsp+30h]
+    call    qword ptr [imp_GetSystemTimeAsFileTime]
+    mov     rax, qword ptr [rsp+30h]
+    xor     edx, edx
+    mov     ecx, 10000
+    div     rcx
+    mov     rcx, rax                    ; bay gio (ms)
+    call    bag_tick                    ; ban trang bi -> luyen da -> cat ruong
+    mov     r12d, eax                   ; r12d = 1: dang don hanh trang
     cmp     byte ptr [cfg_party], 0
     je      q_no_party
     call    party_tick
     test    eax, eax
     jnz     q_resync_auto               ; dang di theo truong nhom -> tam dung auto nhiem vu
 q_no_party:
+    test    r12d, r12d
+    jnz     q_exit                      ; dang don hanh trang -> tam dung auto nhiem vu (giu q_prev_auto)
     cmp     byte ptr [cfg_quest], 0
     jne     q_on
     cmp     byte ptr [cfg_tathu], 0
@@ -1354,7 +1365,8 @@ dt_cached:
 die_tick ENDP
 
 ; -----------------------------------------------------------------------------
-; Luyen da tai cho (goi tu quest_tick moi frame). Khi Auto dang bat va hanh
+; Luyen da tai cho (bag_tick trong hvnj_bag.c goi moi frame, sau phan ban
+; trang bi; ban xong thi bag_tick dat s_active = 1 de luyen ngay). Khi Auto dang bat va hanh
 ; trang con <= S_FREE_MAX o trong: chon mot nhom da co tong diem (mc.nde) BANG
 ; DUNG diem cua mot cap cao hon (= ti le 100%, khong mat da), uu tien cap
 ; thap nhat, toi da 24 vien, du phi (mc.ncx), roi gui packet giong nut "Luyen"

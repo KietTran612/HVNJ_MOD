@@ -22,7 +22,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ASM = os.path.join(HERE, "hvnj_caves.asm")
-CSRC = os.path.join(HERE, "hvnj_menu.c")
+CSRCS = [os.path.join(HERE, n) for n in ("hvnj_menu.c", "hvnj_bag.c")]   # menu Mod, phien don hanh trang
 PAYLOAD_VERSION = 3   # cfg_version: 3 = bat/tat tinh nang bang menu Mod trong game
 PATCHER = os.path.join(ROOT, "patch_skill_delay.py")
 
@@ -47,6 +47,7 @@ GAME_SYMBOLS = {
     "ht_cbt": 0x352F20,
     "bc_ctor": 0x439150,
     "bl_bat": 0x2FC880,
+    "bl_bbb": 0x2FCBC0,             # bl.bbb(int) - writeInt
     "il2cpp_init_md": 0x157800,
     "il2cpp_class_init": 0x0DC4D0,
     "il2cpp_object_new": 0x157910,
@@ -97,6 +98,9 @@ GAME_SYMBOLS = {
     "list_iw_ctor_mi": 0xE3D510,
     "list_iw_add_mi": 0xE3D550,
     "iw_TypeInfo": 0xE5B128,
+    # phien don hanh trang (hvnj_bag.c)
+    "jr_cih": 0x4EB880,             # bool jr.cih() - co dong kham ngoc / truc luyen (jr.lfu)
+    "fp_TypeInfo": 0xE5A638,        # fp (cua hang): static jr[] danh sach hang theo ma
     "__ImageBase": 0x0,
 }
 
@@ -123,7 +127,7 @@ SHOP_DHN_CALLERS = (0x1CE0C3, 0x1D1255)   # mo.dhp: tao nut / an-hien nut
 
 # Bien cau hinh (offset trong .hvnjd) ghi vao PAYLOAD_CFG cho patcher / kiem thu.
 CFG_NAMES = ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party", "cfg_die", "cfg_stone",
-             "cfg_stone_lo", "cfg_stone_hi", "cfg_tathu", "cfg_trial")
+             "cfg_stone_lo", "cfg_stone_hi", "cfg_tathu", "cfg_trial", "cfg_sell")
 
 # Section COFF -> noi dat trong payload
 SKIP_SECTIONS = (".drectve", ".debug$S", ".debug$T", ".chks64", ".llvm_addrsig")
@@ -268,10 +272,12 @@ def build(original_path, ml64, cl):
 
     with tempfile.TemporaryDirectory() as td:
         asm_obj = os.path.join(td, "hvnj_caves.obj")
-        c_obj = os.path.join(td, "hvnj_menu.obj")
         run_ml64(ml64, ASM, asm_obj)
-        run_cl(cl, CSRC, c_obj)
-        objs = [Coff(open(asm_obj, "rb").read()), Coff(open(c_obj, "rb").read())]
+        objs = [Coff(open(asm_obj, "rb").read())]
+        for src in CSRCS:
+            c_obj = os.path.join(td, os.path.splitext(os.path.basename(src))[0] + ".obj")
+            run_cl(cl, src, c_obj)
+            objs.append(Coff(open(c_obj, "rb").read()))
 
     # --- phan loai section; .data cua asm phai dung dau .hvnjd (cfg_block o offset 0)
     secs = {k: [] for k in ("text", "rdata", "xdata", "pdata", "data", "bss")}
@@ -305,10 +311,11 @@ def build(original_path, ml64, cl):
     data_vsize = max(len(data), 0x100)
 
     # moi ham C (ke ca ham static / ham la khong co .pdata) - de kiem thu disassemble het code C
-    c_funcs = sorted((layout[(1, s_["sec"] - 1)] + s_["value"], s_["name"]) for s_ in objs[1].symbols
-                     if s_ and s_["sec"] > 0 and (s_["type"] & 0x30) == 0x20 and (1, s_["sec"] - 1) in layout)
-    c_text_end = {layout[(1, si)]: layout[(1, si)] + len(objs[1].sections[si]["raw"]) for oi, si in secs["text"]
-                  if oi == 1}
+    c_objs = range(1, len(objs))
+    c_funcs = sorted((layout[(oi, s_["sec"] - 1)] + s_["value"], s_["name"]) for oi in c_objs for s_ in objs[oi].symbols
+                     if s_ and s_["sec"] > 0 and (s_["type"] & 0x30) == 0x20 and (oi, s_["sec"] - 1) in layout)
+    c_text_end = {layout[(oi, si)]: layout[(oi, si)] + len(objs[oi].sections[si]["raw"]) for oi, si in secs["text"]
+                  if oi in c_objs}
     c_funcs = [(a, next(e for b_, e in c_text_end.items() if b_ <= a < e), n) for a, n in c_funcs]
 
     publics = {}
@@ -377,11 +384,12 @@ def build(original_path, ml64, cl):
     assert pdata_entries[0][0] > game_pdata[-1][0]
 
     # --- vi tri ghi
+    # .pdata cua game chi con cho cho 32 entry -> chuyen ca bang (exception directory) sang
+    # section moi ".hvnjp" = bang goc + entry cua payload (luon dung sau bang goc vi RVA lon hon).
+    # Byte cua .hvnjp khong nam trong patch_skill_delay.py: patcher dung lai tu DLL goc luc cai.
     pdata_sec = pe.section(".pdata")
+    assert pdata_sec["va"] == pe.exc_rva
     pdata_tail_off = pe.rva_to_off(pe.exc_rva) + pe.exc_size
-    new_exc_size = pe.exc_size + 12 * len(pdata_entries)
-    assert pe.exc_rva + new_exc_size <= pdata_sec["va"] + pdata_sec["rsize"], "het cho trong .pdata"
-    assert not any(orig[pdata_tail_off:pdata_tail_off + 12 * len(pdata_entries)])
 
     file_end = len(orig)
     last = max(pe.sections, key=lambda s: s["raw"])
@@ -390,10 +398,14 @@ def build(original_path, ml64, cl):
     code_rsize = align(code_vsize, FILE_ALIGN)
     data_raw = code_raw + code_rsize
     data_rsize = align(len(data), FILE_ALIGN)
-    new_size_of_image = data_rva + align(data_vsize, SECTION_ALIGN)
+    pdata_rva = data_rva + align(data_vsize, SECTION_ALIGN)
+    pdata_raw = data_raw + data_rsize
+    pdata_size = pe.exc_size + 12 * len(pdata_entries)
+    pdata_rsize = align(pdata_size, FILE_ALIGN)
+    new_size_of_image = pdata_rva + align(pdata_size, SECTION_ALIGN)
 
     hdr_new = pe.sec_table + 40 * pe.nsec
-    assert hdr_new + 80 <= pe.size_of_headers and not any(orig[hdr_new:hdr_new + 80])
+    assert hdr_new + 120 <= pe.size_of_headers and not any(orig[hdr_new:hdr_new + 120])
 
     def sec_hdr(name, vsize, va, rsize, raw, chars):
         return name.encode().ljust(8, b"\0") + struct.pack("<IIIIIIHHI", vsize, va, rsize, raw, 0, 0, 0, 0, chars)
@@ -405,16 +417,19 @@ def build(original_path, ml64, cl):
 
     size_of_code = struct.unpack_from("<I", orig, pe.opt + 4)[0]
     size_of_idata = struct.unpack_from("<I", orig, pe.opt + 8)[0]
-    hp(pe.nsec_off, struct.pack("<H", pe.nsec + 2))
+    hp(pe.nsec_off, struct.pack("<H", pe.nsec + 3))
     hp(pe.opt + 4, struct.pack("<I", size_of_code + code_rsize))
-    hp(pe.opt + 8, struct.pack("<I", size_of_idata + data_rsize))
+    hp(pe.opt + 8, struct.pack("<I", size_of_idata + data_rsize + pdata_rsize))
     hp(pe.opt + 56, struct.pack("<I", new_size_of_image))
-    hp(pe.exc_dir_off + 4, struct.pack("<I", new_exc_size))
-    hp(pdata_sec["hdr"] + 8, struct.pack("<I", new_exc_size if pdata_sec["va"] == pe.exc_rva else pdata_sec["vsize"]))
+    hp(pe.exc_dir_off, struct.pack("<II", pdata_rva, pdata_size))
     hp(hdr_new, sec_hdr(".hvnj", code_vsize, code_rva, code_rsize, code_raw, 0x60000020))
     hp(hdr_new + 40, sec_hdr(".hvnjd", data_vsize, data_rva, data_rsize, data_raw, 0xC0000040))
-    hp(pdata_tail_off, b"".join(struct.pack("<III", *e) for e in pdata_entries))
-    assert pdata_sec["va"] == pe.exc_rva
+    hp(hdr_new + 80, sec_hdr(".hvnjp", pdata_size, pdata_rva, pdata_rsize, pdata_raw, 0x40000040))
+    # ban v2 / v3 truoc ghi entry cua payload vao cuoi .pdata va sua VirtualSize cua .pdata:
+    # khi go mod phai tra lai byte goc o hai cho nay (ban hien tai khong dung toi chung)
+    strip_restore = [(pdata_sec["hdr"] + 8, orig[pdata_sec["hdr"] + 8:pdata_sec["hdr"] + 12]),
+                     (pdata_tail_off, orig[pdata_tail_off:pdata_sec["raw"] + pdata_sec["rsize"]])]
+    assert not any(strip_restore[1][1])
 
     # --- hook vao code game (cai het; cfg_* trong game quyet dinh co chay hay khong)
     def rel32(src_next, target):
@@ -467,6 +482,9 @@ def build(original_path, ml64, cl):
         code=bytes(code) + bytes(code_rsize - len(code)),
         data=bytes(data) + bytes(data_rsize - len(data)),
         code_rva=code_rva, data_rva=data_rva, code_raw=code_raw, data_raw=data_raw,
+        pdata_rva=pdata_rva, pdata_raw=pdata_raw, pdata_rsize=pdata_rsize,
+        game_pdata_off=pe.rva_to_off(pe.exc_rva), game_pdata_size=pe.exc_size,
+        strip_restore=[(o, b_.hex()) for o, b_ in strip_restore],
         header_patches=[(o, a.hex(), b.hex()) for (o, a, b) in header_patches],
         hooks=hooks, cfg=cfg, publics={k: v for k, v in sorted(S.items(), key=lambda kv: kv[1])},
         pdata=pdata_entries, file_size=len(orig), c_funcs=c_funcs,
@@ -485,6 +503,12 @@ def emit(p):
         f"PAYLOAD_DATA_RVA = {p['data_rva']:#x}",
         f"PAYLOAD_CODE_RAW = {p['code_raw']:#x}",
         f"PAYLOAD_DATA_RAW = {p['data_raw']:#x}",
+        f"PAYLOAD_PDATA_RVA = {p['pdata_rva']:#x}",
+        f"PAYLOAD_PDATA_RAW = {p['pdata_raw']:#x}",
+        f"PAYLOAD_PDATA_RSIZE = {p['pdata_rsize']:#x}",
+        f"GAME_PDATA_OFF = {p['game_pdata_off']:#x}",
+        f"GAME_PDATA_SIZE = {p['game_pdata_size']:#x}",
+        "PAYLOAD_STRIP_RESTORE = [" + ", ".join(f"({o:#x}, '{h}')" for o, h in p["strip_restore"]) + "]",
         "PAYLOAD_CODE = bytes.fromhex(",
         hexblock(p["code"]),
         ")",
