@@ -117,6 +117,10 @@ CHAINED_BLOCKS = [
     ("bld_trial", "bld_trial_end", 0x477CBF),
 ]
 
+# mo.dhn: "map nay co nut Shop tren thanh Top khong" (vá thẳng, luôn tra true)
+SHOP_DHN = 0x1CC170
+SHOP_DHN_CALLERS = (0x1CE0C3, 0x1D1255)   # mo.dhp: tao nut / an-hien nut
+
 # Bien cau hinh (offset trong .hvnjd) ghi vao PAYLOAD_CFG cho patcher / kiem thu.
 CFG_NAMES = ("cfg_block", "cfg_mob", "cfg_stage", "cfg_quest", "cfg_accept", "cfg_party", "cfg_die", "cfg_stone",
              "cfg_stone_lo", "cfg_stone_hi", "cfg_tathu", "cfg_trial")
@@ -446,6 +450,9 @@ def build(original_path, ml64, cl):
         # menu Mod: lenh menu -> action_hook; them dong "Mod HVNJ" vao menu nhan vat
         (0x4E6027, "E894B6CFFF", "E8" + rel32(0x4E602C, S["action_hook"]).hex()),
         (0x1EA0BA, "E8E1064400", "E8" + rel32(0x1EA0BF, S["menuchar_hook"]).hex()),
+        # thanh Top: nut Shop (cua hang tong, ban duoc do) hien o moi map, khong can tick.
+        # mo.dhn chi tra true o 13 map lang/truong/phan vien; chi mo.dhp (tao + an/hien nut Shop) goi no
+        (SHOP_DHN, "4883EC28", "B001C3CC"),     # mov al, 1 ; ret
     ]
     for rva, o, p in hooks:
         ob, pb = bytes.fromhex(o), bytes.fromhex(p)

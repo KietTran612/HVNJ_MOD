@@ -378,6 +378,7 @@ PAYLOAD_HOOKS = [
     (0x477cbf, '0f84d3030000', 'e96ce4d900cc'),
     (0x4e6027, 'e894b6cfff', 'e8e414d300'),
     (0x1ea0ba, 'e8e1064400', 'e881d40201'),
+    (0x1cc170, '4883ec28', 'b001c3cc'),
 ]
 # === END GENERATED PAYLOAD ===
 
@@ -586,6 +587,9 @@ def print_status(dll_path):
         print("    Mặc định tắt hết; lựa chọn được lưu cho lần mở game sau. Các dòng của menu:")
         for i, name in enumerate(MENU_ITEMS, 1):
             print(f"    {i:2}. {name}")
+        print("    Nút Shop trên thanh Top luôn hiện ở mọi map (không cần tick).")
+        if not all(read_at(data, rva, len(n) // 2) == bytes.fromhex(n) for rva, _o, n in PAYLOAD_HOOKS):
+            print("[!] DLL cài bằng bản script cũ hơn. Chạy --install để cập nhật.")
     elif kind == KIND_ORIGINAL:
         print("[ ] Chưa cài mod. Chạy: python patch_skill_delay.py --install")
     elif kind in (KIND_V1, KIND_V2):

@@ -9,7 +9,8 @@
  3. Cấu trúc PE: section mới, SizeOfImage, .pdata sắp xếp đúng.
  4. Disassemble mọi khối code (cave asm, hàm C) và hook: lệnh nhảy/gọi trỏ tới địa
     chỉ đã biết, đích nhảy về đầu lệnh của hàm game, không ai nhảy vào giữa vùng đã
-    thay, sau lệnh call trong asm không có mẫu epilogue.
+    thay, sau lệnh call trong asm không có mẫu epilogue. Nút Shop: mo.dhn luôn trả true
+    và chỉ phần nút Shop của thanh Top gọi mo.dhn.
  5. (Windows) Nạp DLL thật bằng LoadLibraryEx: quyền trang nhớ, RtlLookupFunctionEntry
     cho mọi khối, RtlVirtualUnwind từ trong cave = unwind tại vị trí hook gốc.
  6. Chạy THẬT các cave chặn theo cờ (qua trampoline): cờ tắt -> đi đúng đường của lệnh
@@ -19,7 +20,8 @@
  8. Chạy THẬT stone_tick (luyện đá) với nhân vật / hành trang giả.
  9. Chạy THẬT quest_tick (auto nhiệm vụ ngày + tà thú) với NPC / nhiệm vụ / map giả.
 10. Chạy CLI patch_skill_delay.py trên bản sao: nâng cấp từ v1, lệnh cũ, restore.
-11. (--old-v2) Nâng cấp DLL v2 cũ (chọn tính năng bằng script) lên bản menu.
+11. (--old-v2) Nâng cấp DLL v2 cũ (chọn tính năng bằng script) hoặc bản v3 dựng trước đó
+    lên bản menu hiện tại.
 """
 import argparse
 import ctypes
@@ -74,6 +76,20 @@ def disasm(data, rva, n):
 def insn_starts(data, start, end):
     """Tập địa chỉ bắt đầu lệnh của một hàm game (disassemble tuyến tính)."""
     return {i.address for i in disasm(data, start, end - start)}
+
+
+def call_sites(data, target):
+    """Mọi lệnh call/jmp rel32 trong code game nhảy tới target."""
+    sites = set()
+    for _name, va, vsize, raw, rsize in P.section_table(data)[:2]:      # .text, il2cpp
+        sec = bytes(data[raw:raw + min(vsize, rsize)])
+        for op in (b"\xe8", b"\xe9"):
+            i = sec.find(op)
+            while 0 <= i <= len(sec) - 5:
+                if va + i + 5 + struct.unpack_from("<i", sec, i + 1)[0] == target:
+                    sites.add(va + i)
+                i = sec.find(op, i + 1)
+    return sites
 
 
 def kernel32():
@@ -298,6 +314,10 @@ def test_disasm(orig, out):
     for rva, (mn, tgt) in HOOK_EXPECT.items():
         ins = disasm(out, rva, 8)[0]
         check(ins.mnemonic == mn and ins.operands[0].imm == S[tgt], f"hook {rva:#x}: {ins.mnemonic} {ins.op_str}")
+    # nút Shop luôn hiện: mo.dhn -> mov al, 1 ; ret, và chỉ phần nút Shop của thanh Top gọi mo.dhn
+    shop = [(i.mnemonic, i.op_str) for i in disasm(out, B.SHOP_DHN, 3)]
+    check(shop == [("mov", "al, 1"), ("ret", "")], f"mo.dhn phải luôn trả true: {shop}")
+    check(call_sites(orig, B.SHOP_DHN) == set(B.SHOP_DHN_CALLERS), "mo.dhn có chỗ gọi ngoài nút Shop")
     # không lệnh nào của hàm game nhảy vào giữa vùng đã thay
     for rva, o, _n in P.PAYLOAD_HOOKS:
         end = rva + len(o) // 2
@@ -1352,13 +1372,15 @@ def test_cli(orig, legacy_path):
 
 
 def test_old_payload(paths):
-    """DLL v2 (chọn tính năng bằng script) -> nhận diện, khôi phục, nâng cấp lên bản menu."""
-    print("[11] Nâng cấp từ DLL v2 cũ")
+    """DLL v2 (chọn tính năng bằng script) hoặc bản menu v3 dựng trước đó -> nhận diện, khôi phục,
+    nâng cấp lên bản menu hiện tại."""
+    print("[11] Nâng cấp từ DLL cũ (v2 / v3 trước)")
     for old_path in paths:
         old = open(old_path, "rb").read()
         kind, on = P.detect(old)
         print(f"    {os.path.basename(old_path)}: {kind}, {sorted(on)}")
-        check(kind == P.KIND_V2 and on, f"{old_path}: phải nhận ra bản v2 và tính năng")
+        check((kind == P.KIND_V2 and on) or (kind == P.KIND_V3 and not on),
+              f"{old_path}: phải nhận ra bản v2 (kèm tính năng) hoặc bản v3")
         check(sha(P.strip_payload(old)) == P.ORIGINAL_SHA256, f"{old_path}: strip_payload")
         td = tempfile.mkdtemp()
         try:
@@ -1376,7 +1398,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--original", default=os.path.join(ROOT, "GameAssembly.dll.bak"))
     ap.add_argument("--legacy", help="DLL đã cài bản mod v1 (tùy chọn)")
-    ap.add_argument("--old-v2", nargs="+", default=[], help="DLL v2 cũ (tùy chọn, nhiều file)")
+    ap.add_argument("--old-v2", nargs="+", default=[], help="DLL v2 cũ / v3 dựng trước (tùy chọn, nhiều file)")
     args = ap.parse_args()
     orig = open(args.original, "rb").read()
     if sha(orig) != P.ORIGINAL_SHA256:

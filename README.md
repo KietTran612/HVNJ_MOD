@@ -32,6 +32,7 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 | Đóng | đóng menu |
 
 - **Không auto nào dùng xu.** Chỉ luyện đá là tốn phí, và chỉ trả bằng yên.
+- **Nút Shop trên thanh Top luôn hiện ở mọi map.** Sửa cố định, không có dòng tick (xem [Nút Shop](#-nút-shop-luôn-hiện-ở-mọi-map)).
 - **Mặc định tắt hết.** Lựa chọn được lưu (Unity `PlayerPrefs`, khóa `HVNJ_MOD`) nên lần mở game sau vẫn giữ.
 - Tick / bỏ tick một tính năng đang chạy dở thì trạng thái dở dang của nó được xoá. Auto nhiệm vụ / tà thú bắt đầu khi bạn **bật Auto** sau khi đã tick.
 
@@ -198,6 +199,16 @@ Giống auto nhiệm vụ ngày, mod dùng lại pipeline "tự động làm nhi
 
 > ⚠️ **Chưa kiểm chứng trong game:** option **nhận** trong menu tà thú = 0 là suy luận, giống nhiệm vụ ngày. Menu 1 và option 2 (trả) lấy từ code game nên chắc chắn. Nếu nhận không được, đổi dòng "Option nhận nhiệm vụ ở NPC" sang 1. Lưu ý dòng này đổi cả option nhận nhiệm vụ ngày.
 
+### 🛒 Nút Shop luôn hiện ở mọi map
+Sửa cố định, **không có dòng tick**: cài mod là có.
+
+- Nút Shop trên thanh Top mở **cửa hàng tổng** (danh sách cửa hàng mã 7), nơi bán được đồ.
+- Game gốc chỉ tạo và hiện nút này ở 13 map làng / trường / phân viện (map 1, 10, 17, 22, 27, 32, 38, 43, 48, 72, 110, 129, 160). Ở map khác nút bị ẩn; vào game ở map khác thì nút còn chưa được tạo.
+- Điều kiện đó nằm trong `mo.dhn`. Mod sửa `mo.dhn` thành luôn trả về "có". Chỉ phần nút Shop của thanh Top (`mo.dhp`) gọi hàm này, nên không ảnh hưởng chức năng khác.
+- Vẫn giữ điều kiện server bật tính năng shop (`hw+0x166`) của game.
+
+> ⚠️ **Chưa kiểm chứng trong game:** client không chặn mở shop ở map khác, nhưng chưa biết server có trả danh sách hàng và cho bán ở map ngoài làng không. Nếu server không trả thì bấm nút sẽ ra cửa hàng trống.
+
 ---
 
 ## 🛠️ Cách dùng
@@ -228,7 +239,7 @@ Cách nhanh: chép `GameAssembly.dll` trong repo (đã cài mod) vào thư mục
   - `.hvnjd` (RW): cấu hình + trạng thái.
 - Không ghi vào code của game và chỉ dùng địa chỉ RIP-relative, nên an toàn với ASLR.
 - Mỗi cave đều có unwind info đăng ký trong `.pdata`. Cave chạy bên trong frame của hàm game dùng unwind dạng *chained* tới hàm đó. Nhờ vậy exception của game đi qua cave vẫn được xử lý bình thường thay vì làm game thoát.
-- **Mọi hook đều được cài, nhưng hành vi do cờ `cfg_*` trong `.hvnjd` quyết định lúc chạy.** Các chỗ bản v2 sửa thẳng byte (đếm ngược khi chết, Thí Luyện, phần lõi chọn quái) nay là cave kiểm tra cờ: cờ tắt thì chạy đúng lệnh gốc của game.
+- **Mọi hook đều được cài, nhưng hành vi do cờ `cfg_*` trong `.hvnjd` quyết định lúc chạy.** Ngoại lệ duy nhất là nút Shop (`mo.dhn`), được sửa cố định theo yêu cầu. Các chỗ bản v2 sửa thẳng byte (đếm ngược khi chết, Thí Luyện, phần lõi chọn quái) nay là cave kiểm tra cờ: cờ tắt thì chạy đúng lệnh gốc của game.
 - Mã nguồn:
   - `mod_src/hvnj_caves.asm`: các cave, assemble bằng `ml64`;
   - `mod_src/hvnj_menu.c`: menu Mod và lưu / đọc lựa chọn, biên dịch bằng `cl` (không CRT, không bảng con trỏ tuyệt đối);
@@ -250,10 +261,11 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
   - kiểm tra packet gửi ra ở 24 tình huống, gồm cả chưa tick thì không luyện: chọn đá, chờ/gửi lại/nghỉ, đủ hay thiếu yên (có xu cũng không luyện), chỉ gửi cmd 20, leo cấp tới cấp đích rồi cất rương, rương chưa nạp/đầy/bị từ chối, gộp nhiều cấp, giới hạn 24 viên;
 - **chạy thật mã máy auto nhiệm vụ** (`quest_tick`) với NPC, map và nhiệm vụ giả, ở 10 tình huống: chưa tick thì không làm gì, thứ tự nhận (ngày → tà thú), menu nhận tà thú, ưu tiên nhiệm vụ ngày, chờ tà thú xuất hiện, tắt Auto thì dừng;
 - gỡ được patch "0.3s" khỏi DLL cũ;
-- nâng cấp các DLL v2 cũ (`--old-v2`, nhiều file) lên bản menu;
+- nâng cấp các DLL v2 cũ hoặc bản v3 dựng trước đó (`--old-v2`, nhiều file) lên bản menu hiện tại;
 - nâng cấp được từ v1;
 - cấu trúc PE;
 - disassemble mọi lệnh nhảy/gọi của cave asm và hàm C; không lệnh nào của game nhảy vào giữa vùng đã thay;
+- nút Shop: `mo.dhn` luôn trả về "có", và cả DLL chỉ có 2 chỗ gọi `mo.dhn`, đều là phần nút Shop của thanh Top;
 - nạp DLL thật bằng `LoadLibraryEx` để kiểm tra quyền trang nhớ và `RtlLookupFunctionEntry`;
 - `RtlVirtualUnwind` từ trong cave cho kết quả giống hệt khi unwind tại vị trí hook gốc;
 - chạy thử CLI.
@@ -270,6 +282,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 | `0x19C061`, `0x477CBF` | `mo.dek`, `eq.bld` | Auto và tìm đường trong map 161 (khi bật Giữ Auto trong Thí Luyện) |
 | `0x4E6027` | `iw.cgd` | lệnh của menu Mod (`0x48560000+`) -> `mod_action`, còn lại -> `mo.djh` |
 | `0x1EA0BA` | `mo.doMenuChar` | thêm dòng "Mod HVNJ" vào menu nhân vật |
+| `0x1CC170` | `mo.dhn` | `mov al, 1 ; ret`: nút Shop trên thanh Top hiện ở mọi map (sửa cố định) |
 
 ---
 
