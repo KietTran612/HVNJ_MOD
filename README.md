@@ -10,6 +10,23 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 ---
 
+## Tiến độ hiện tại — 26/10/2026
+
+**Đang tập trung sửa hai nút Rương và Nâng cấp. Chưa chuyển sang sửa Shop.**
+
+- **Đã xác định khác biệt ở phía client:** bản cũ mở bảng trực tiếp, bỏ qua chuỗi tương tác NPC. Log tại map 68 có lệnh cất đồ/nâng cấp nhưng không có phản hồi kết quả trong cửa sổ theo dõi; client vẫn nhận các gói khác.
+- **Đã ghi nhận luồng gốc tại map 38:** Rương dùng NPC **5**, Nâng cấp dùng NPC **6**; đều nói chuyện bằng `cor(npc)` rồi chọn `menu(npc, 0, 0)`. Server trả `cmd 30` để mở bảng. Có 3 phản hồi cất rương và 2 gói kết quả nâng cấp trong mẫu này.
+- **Đã triển khai, build và cài bản sửa:** hai nút trên thanh Top và hai dòng tương ứng trong menu Mod dùng chuỗi NPC trên, chờ server mở bảng. Có timeout 5 giây mỗi bước, bỏ phản hồi muộn trong khoảng bảo vệ 5 giây, chặn các yêu cầu NPC gửi chồng; không tự gửi lại giao dịch.
+- **Đã kiểm thử:** `test_service.py`, `test_diag.py` và toàn bộ `verify_mod.py` đều đạt; có rà soát độc lập và kiểm tra DLL đã cài khớp payload được dựng. Đây là kiểm thử mã máy với dữ liệu/server giả, chưa chứng minh server thật cho dùng từ xa.
+- **Còn chờ:** người dùng chạy lại bản sửa bằng `Chay_game_ghi_log.cmd`, thử **nút mod** tại map 38 rồi ngoài làng/map 68. Cần xem `SERVICE server-approved-open`, phản hồi thao tác hoặc thông báo timeout để phân biệt thiếu chuỗi NPC với server bắt buộc đúng vị trí.
+- **Bước tiếp theo:** tiếp tục sửa/kiểm chứng Rương và Nâng cấp tới khi ổn trong game; sau đó mới lấy mẫu NPC/menu và sửa Shop. Chưa có mẫu Shop để suy ra thông tin đúng.
+
+Log ở `diagnostic-logs/`; giữ `.full.log` tại máy và dùng `.service.log` để phân tích. DLL trước bản sửa hai nút được sao lưu với tên `GameAssembly.before-service-buttons.*.dll.bak` trong cùng thư mục. Mã nguồn và bản build mới đã được cập nhật; các file ZIP cũ chưa được đóng gói lại.
+
+Tài liệu tiếp tục công việc: [hướng dẫn ghi log](mod_src/DIAGNOSTICS.md), [đối chiếu hai phiên log](mod_src/LOG_ANALYSIS_20261026.md), [phân tích giao thức ban đầu](mod_src/API_INVESTIGATION.md).
+
+---
+
 ## 🎛️ Bật / tắt tính năng trong game: menu "Mod HVNJ"
 
 1. Cài mod (xem [Cách dùng](#-cách-dùng)), vào game.
@@ -31,13 +48,13 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 | Luyện đá lên cấp: … | mỗi lần bấm: mọi cấp → 2 → 3 → … → 12 → mọi cấp. Chọn cấp thì đá đạt cấp đó được cất vào rương |
 | Luyện đá từ cấp: … | chỉ hiện khi đã chọn cấp đích; mỗi lần bấm tăng 1 (vòng lại 1) |
 | Option nhận nhiệm vụ ở NPC: … | 0 → 1 → 2 → 3 (dùng khi nhận nhiệm vụ không được) |
-| Mở rương đồ | mở bảng rương đồ ở bất kỳ map nào |
-| Mở nâng cấp trang bị | mở bảng nâng cấp trang bị ở bất kỳ map nào |
+| Mở rương đồ | yêu cầu NPC 5; server cho phép mới mở bảng |
+| Mở nâng cấp trang bị | yêu cầu NPC 6; server cho phép mới mở bảng |
 | Đóng | đóng menu |
 
 - **Không auto nào dùng xu.** Chỉ luyện đá là tốn phí, và chỉ trả bằng yên. Bán trang bị thì nhận về yên.
 - **Nút Shop trên thanh Top luôn hiện ở mọi map.** Sửa cố định, không có dòng tick (xem [Nút Shop](#-nút-shop-luôn-hiện-ở-mọi-map)).
-- **Nút "Rương" và "Nâng cấp" ở cuối hàng 2 thanh Top** mở rương đồ / nâng cấp trang bị ở bất kỳ map nào. Cũng là sửa cố định (xem [Nút Rương / Nâng cấp](#-nút-rương-và-nâng-cấp-trên-thanh-top)).
+- **Nút "Rương" và "Nâng cấp" ở cuối hàng 2 thanh Top** gửi yêu cầu mở dịch vụ qua NPC; việc dùng ngoài map đang chờ kiểm chứng server thật (xem [Nút Rương / Nâng cấp](#-nút-rương-và-nâng-cấp-trên-thanh-top)).
 - **Mặc định tắt hết.** Lựa chọn được lưu (Unity `PlayerPrefs`, khóa `HVNJ_MOD`) nên lần mở game sau vẫn giữ.
 - Tick / bỏ tick một tính năng đang chạy dở thì trạng thái dở dang của nó được xoá. Auto nhiệm vụ / tà thú bắt đầu khi bạn **bật Auto** sau khi đã tick.
 
@@ -256,16 +273,18 @@ Khi cửa hàng chưa mở, game chỉ lưu dữ liệu về: `fp.boa` / `fp.bor
 > ⚠️ **Chưa kiểm chứng trong game:** client không chặn tải danh sách shop, xem chi tiết hay bán khi đứng xa NPC, nhưng chưa biết server có chấp nhận không. Nếu server không trả lời thì mod tự nghỉ như trên. Số dòng được đếm giống nhau cho món trong hành trang và bản shop (mọi dòng trong dữ liệu món đồ); nên mở "Xem trước" để đối chiếu với số dòng thấy trong game trước khi bật bán.
 
 ### 📦 Mở rương đồ / nâng cấp trang bị ở bất kỳ map nào
-Hai dòng **"Mở rương đồ"** và **"Mở nâng cấp trang bị"** trong menu Mod mở bảng tương ứng của game ngay tại chỗ. Đây là lệnh bấm là chạy, không có tick.
+Hai dòng **"Mở rương đồ"** và **"Mở nâng cấp trang bị"** trong menu Mod gửi yêu cầu mở dịch vụ tới server. Đây là lệnh bấm là chạy, không có tick.
 
-- Game mở mọi bảng bằng `mo.djd(loại)`: rương đồ = 4, nâng cấp trang bị = 10. Bình thường hàm này chạy khi server báo "mở bảng" sau lúc nói chuyện với NPC, nhưng chính client cũng tự gọi nó (ví dụ nút Auto trên thanh Top), nên mod gọi được ở bất kỳ map nào.
+**Bản sửa theo log thực tế:** Rương gửi nói chuyện NPC 5 rồi chọn menu `(0, 0)`; Nâng cấp dùng NPC 6, cũng menu `(0, 0)`. Mod đợi server trả lệnh mở bảng (`cmd 30`), rồi để game tự mở bảng. Không mở bảng trực tiếp khi chưa có phản hồi. Mỗi bước chờ tối đa 5 giây; server không trả lời thì hiện thông báo, không tự gửi lại giao dịch. Bấm liên tiếp không gửi chồng yêu cầu; các tác vụ Auto của mod tạm dừng trong lúc mở dịch vụ. Trong lúc chờ, yêu cầu NPC khác được chặn và báo để bấm lại sau; sau timeout có 5 giây bỏ phản hồi muộn rồi mới nhận yêu cầu tiếp.
+
+- Game mở mọi bảng bằng `mo.djd(loại)`: rương đồ = 4, nâng cấp trang bị = 10. Hàm này chạy khi server gửi cmd30 sau lúc nói chuyện với NPC; bản sửa để handler gốc gọi hàm sau khi nhận xác nhận.
 - **Rương đồ:** nếu từ lúc vào game đã mở rương lần nào thì bảng hiện ngay danh sách rương. Nếu chưa, bảng xin danh sách từ server.
 - **Nâng cấp trang bị:** bảng dùng đồ trong hành trang nên mở là có đủ.
 
-> ⚠️ **Chưa kiểm chứng trong game:** client không chặn mở các bảng này ở xa NPC, nhưng chưa biết server có trả danh sách rương, cho chuyển đồ ra / vào rương, hay cho nâng cấp (cmd 21) khi đứng xa NPC không.
+> **Đã quan sát:** tại map 38, mở qua NPC gốc có phản hồi cất rương và nâng cấp. Tại map 68, bản cũ mở bảng trực tiếp không có các phản hồi đó. Bản sửa gửi đủ chuỗi NPC đang chờ kiểm chứng ngoài map; server vẫn có thể yêu cầu đúng vị trí.
 
 ### 🔘 Nút "Rương" và "Nâng cấp" trên thanh Top
-Sửa cố định, **không có dòng tick**: cài mod là có. Bấm "Rương" mở rương đồ, bấm "Nâng cấp" mở bảng nâng cấp trang bị, ở bất kỳ map nào.
+Sửa cố định, **không có dòng tick**: cài mod là có. Bấm "Rương" / "Nâng cấp" gửi cùng yêu cầu NPC như hai dòng trong menu Mod; server phản hồi mới mở bảng.
 
 **Vị trí, không đè và không bị che:** thanh Top (góc trên bên phải) được game xếp lại mỗi frame thành 2 hàng (`mo.dhp`):
 - hàng 1: nút Shop rồi sang trái, mỗi nút cách 30;
@@ -275,7 +294,7 @@ Mỗi 0,25 giây mod đọc vị trí thật các nút hàng 2 (`hk.bvx` lưu �
 
 - Tạo đúng như game tạo nút Shop (`mo.dhp`): `ho.bzc` (nút ảnh, cùng ảnh nền với nút Shop) + `ho.cab` (chữ, cùng font / màu), hành động là `mo.mk(mo, id)` giống nút Shop.
 - Hai nút là **con của nút Shop**, nên đi theo vị trí (cả hiệu ứng thu / mở thanh Top) và ẩn / hiện cùng nút Shop.
-- Bấm nút thì game gọi `mo.dhe(id)` như mọi nút trên thanh Top; mod chặn ở lệnh đầu của `mo.dhe` các id riêng của mod (`0x48560100+`) rồi gọi `mo.djd(4)` / `mo.djd(10)` (giống dòng "Mở rương đồ" / "Mở nâng cấp trang bị" của menu Mod). Id khác chạy nguyên `mo.dhe` của game.
+- Bấm nút thì game gọi `mo.dhe(id)` như mọi nút trên thanh Top; mod chặn các id riêng (`0x48560100+`) rồi gọi `service_open(4)` / `service_open(10)`. Id khác chạy nguyên `mo.dhe` của game. `hvnj_service.c` quản lý yêu cầu, xác nhận NPC, chọn menu và timeout; handler cmd30 gốc mở bảng sau khi server cho phép.
 - Mod kiểm tra mỗi 0,25 giây: nút Shop đã có mà chưa có nút của mod thì tạo; nút Shop được tạo lại thì tạo lại nút.
 
 > ⚠️ **Chưa kiểm chứng trong game:** vị trí được tính từ code xếp nút của game, chưa xem trên màn hình thật. Giao diện không thuộc thanh Top (nếu có ở cuối hàng 2) chưa được kiểm tra. Phần server chấp nhận thao tác ở xa NPC giống như mục trên.
@@ -337,7 +356,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 `verify_mod.py` kiểm tra các mục sau:
 - cài mod: nhận ra bản v3, **mọi cờ mặc định tắt**, khôi phục được bản gốc;
 - **chạy thật từng cave chặn theo cờ** (31 tình huống, qua trampoline): cờ tắt thì nhảy đúng đích của lệnh gốc và giữ giá trị gốc, cờ bật thì ra hành vi của mod;
-- **chạy thật menu Mod** (hàm C): menu nhân vật có thêm dòng "Mod HVNJ"; "Mở rương đồ" / "Mở nâng cấp trang bị" gọi `mo.djd(4)` / `mo.djd(10)` ở map ngoài làng; menu hiện đúng chữ và `[x]`; tick / bỏ tick đổi đúng cờ và xoá trạng thái dở dang; lưu / đọc `PlayerPrefs`, bỏ qua chuỗi lưu sai; lệnh của game vẫn tới `mo.djh` nguyên tham số;
+- **chạy thật menu Mod** (hàm C): menu nhân vật có thêm dòng "Mod HVNJ"; "Mở rương đồ" / "Mở nâng cấp trang bị" yêu cầu NPC5/6, không tự mở UI khi chưa có cmd30; menu hiện đúng chữ và `[x]`; tick / bỏ tick đổi đúng cờ và xoá trạng thái dở dang; lưu / đọc `PlayerPrefs`, bỏ qua chuỗi lưu sai; lệnh của game vẫn tới `mo.djh` nguyên tham số;
 - **chạy thật mã máy luyện đá** (`stone_tick`) trong DLL đã nạp:
   - các hàm game được thay bằng callback Python;
   - nhân vật, hành trang và bảng điểm đá là dữ liệu giả;
@@ -350,7 +369,7 @@ python mod_src/verify_mod.py      # kiểm thử toàn bộ, không cần mở g
 - cấu trúc PE;
 - disassemble mọi lệnh nhảy/gọi của cave asm và hàm C; không lệnh nào của game nhảy vào giữa vùng đã thay;
 - nút Shop: `mo.dhn` luôn trả về "có", và cả DLL chỉ có 2 chỗ gọi `mo.dhn`, đều là phần nút Shop của thanh Top;
-- nút "Rương" / "Nâng cấp": chạy thật hook `mo.dhe` (id của mod mở đúng bảng, id khác về lại `mo.dhe`) và việc tạo nút (con của nút Shop, đúng ảnh / chữ, không tạo trùng, tạo lại khi nút Shop mới), vị trí nối tiếp cuối hàng 2 khi hàng 2 trống / có nút / bớt nút;
+- nút "Rương" / "Nâng cấp": chạy thật hook `mo.dhe` (id của mod yêu cầu đúng NPC5/6, id khác về lại `mo.dhe`) và việc tạo nút (con của nút Shop, đúng ảnh / chữ, không tạo trùng, tạo lại khi nút Shop mới), vị trí nối tiếp cuối hàng 2 khi hàng 2 trống / có nút / bớt nút;
 - nạp DLL thật bằng `LoadLibraryEx` để kiểm tra quyền trang nhớ và `RtlLookupFunctionEntry`;
 - `RtlVirtualUnwind` từ trong cave cho kết quả giống hệt khi unwind tại vị trí hook gốc;
 - chạy thử CLI.

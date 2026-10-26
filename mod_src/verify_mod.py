@@ -224,6 +224,7 @@ FRAME_FUNCS = {
     "party_tick": (0x30, ["Rdi", "Rsi", "Rbx"]),
     "die_tick": (0x38, ["R12", "Rdi", "Rsi", "Rbx"]),
     "stone_tick": (0x68, ["R15", "R14", "R13", "R12", "Rdi", "Rsi", "Rbp", "Rbx"]),
+    "diag_rx_hook": (0x38, []),
     "action_hook": (0x28, []),
     "menuchar_hook": (0x28, []),
     "dhe_hook": (0, []),
@@ -240,6 +241,9 @@ HOOK_EXPECT = {
     0x3612E0: ("jmp", "cdy_dlg"), 0x360946: ("jmp", "cdq_dlg"), 0x19C061: ("jmp", "dek_trial"),
     0x477CBF: ("jmp", "bld_trial"), 0x4E6027: ("call", "action_hook"), 0x1EA0BA: ("call", "menuchar_hook"),
     0x1C7870: ("jmp", "dhe_hook"),
+    0x43A6A8: ("jmp", "diag_bg_send"),
+    0x43C334: ("jmp", "diag_bk_send"),
+    0x200DD0: ("jmp", "diag_rx_hook"),
 }
 ASM_FUNCS = set(FRAME_FUNCS)
 
@@ -534,12 +538,17 @@ class CaveSim:
         self.lists, self.iws, self.shown, self.prefs, self.djh = {}, {}, [], {}, []
         self.cih = {}                    # jr -> 1: có dòng khảm ngọc / trục luyện
         self.djd = []                    # (mo, loại bảng) đã mở bằng mo.djd
+        self.diag_logs = []
+        self.cors, self.service_errors = [], []
         # UI giả cho nút trên thanh Top: Component -> GameObject -> Transform, tên, con
         self.ui_go, self.ui_tr, self.ui_name, self.ui_children = {}, {}, {}, {}
         self.buttons, self.labels, self.label_pos = [], [], []
         self.anch = {}                   # RectTransform -> anchoredPosition (x, y) đặt lần cuối
         G = B.GAME_SYMBOLS
         self.cbs = {
+            "lj_cor": F(U64, U64, U64, U64)(lambda _s, npc, _mi: self.cors.append(npc) or 0),
+            "hw_cdt": F(U64, U64, U64)(lambda p, _mi: self.service_errors.append(self.read_str(p)) or 0),
+            "unity_debug_log": F(U64, U64, U64)(lambda p, _mi: self.diag_logs.append(self.read_str(p)) or 0),
             "lm_cua": F(U64, U64)(lambda _mi: self.char),
             "lj_cmy": F(U64, U64)(lambda _mi: self.service),
             "il2cpp_init_md": F(U64, U64)(lambda slot: self.init_md.append(slot - self.base) or 0),
@@ -1055,17 +1064,19 @@ def test_gates(orig, out):
         s.set_map(163)
         expect("dgj_filter", boss, False, {"cfg_mob": 1, "cfg_stage": 1}, "dgj_accept", None, "Thí Luyện: đánh hết")
         expect("dgj_filter", boss, False, {"cfg_mob": 1}, "dgj_skip", None, "Thí Luyện, tắt tự qua ải")
-        # mo.dhe (bấm nút thanh Top): id nút của mod -> mo.djd(4 / 10); id khác -> chạy tiếp mo.dhe
+        # Shortcut requests the real NPC and does not open a local panel.
         dhe = F(None, U64, U64)(s.sym("dhe_hook"))
-        for ident, want_back, want_djd in ((5, True, []), (TOP_BTN, False, [(s.mo, 4)]), (TOP_BTN + 1, False, [(s.mo, 10)]),
+        for ident, want_back, want_npc in ((5, True, []), (TOP_BTN, False, [5]), (TOP_BTN + 1, False, [6]),
                                            (TOP_BTN + 2, True, []), (TOP_BTN - 1, True, [])):
             n += 1
             s.djd.clear()
+            s.cors.clear()
+            F(None)(s.sym("service_reset"))()
             s.w32(s.marker, 0xFFFFFFFF)
             dhe(s.mo, ident)
             back = ctypes.c_uint32.from_address(s.marker).value == BACK_TARGETS.index("dhe_back")
-            check(back == want_back and s.djd == want_djd,
-                  f"mo.dhe({ident:#x}): về mo.dhe = {back}, mo.djd = {s.djd}")
+            check(back == want_back and not s.djd and s.cors == want_npc,
+                  f"mo.dhe({ident:#x}): original={back}, NPC={s.cors}, local UI={s.djd}")
     finally:
         s.close()
     print(f"    {n} tình huống")
@@ -1164,13 +1175,15 @@ def test_menu(orig, out):
               and pv[-2:] == [("Quay lại", ACT), ("Đóng", ACT + 13)], f"Xem trước: {pv}")
         s.action(ACT)
         check(menu_ok(s.shown[-1], t, 1), "Quay lại: về menu Mod")
-        # mở rương đồ / nâng cấp trang bị ở bất kỳ map nào: mo.djd(GameScr, 4 / 10), không mở lại menu
+        # Menu shortcuts use the same NPC handshake as the Top buttons.
         n_shown = len(s.shown)
         s.set_map(55)
         s.action(ACT_OPEN_BOX)
+        F(None)(s.sym("service_reset"))()
         s.action(ACT_OPEN_UP)
-        check(s.djd == [(s.mo, 4), (s.mo, 10)] and len(s.shown) == n_shown and s.prefs["HVNJ_MOD"] == saved,
-              f"mở rương đồ = mo.djd(4), nâng cấp = mo.djd(10): {s.djd}")
+        check(not s.djd and s.cors == [5, 6] and len(s.shown) == n_shown and s.prefs["HVNJ_MOD"] == saved,
+              f"menu shortcuts request NPC5/6 without local UI: {s.cors}, {s.djd}")
+        F(None)(s.sym("service_reset"))()
         # lệnh của game vẫn tới mo.djh nguyên tham số
         s.action(1007, p=0x77)
         s.action(ACT + 32, p=0x78)

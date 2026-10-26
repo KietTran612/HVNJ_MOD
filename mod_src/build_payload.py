@@ -22,7 +22,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ASM = os.path.join(HERE, "hvnj_caves.asm")
-CSRCS = [os.path.join(HERE, n) for n in ("hvnj_menu.c", "hvnj_bag.c")]   # menu Mod, phien don hanh trang
+CSRCS = [os.path.join(HERE, n) for n in ("hvnj_menu.c", "hvnj_bag.c", "hvnj_diag.c", "hvnj_service.c")]
 PAYLOAD_VERSION = 3   # cfg_version: 3 = bat/tat tinh nang bang menu Mod trong game
 PATCHER = os.path.join(ROOT, "patch_skill_delay.py")
 
@@ -30,6 +30,12 @@ ORIGINAL_SHA256 = "a17ddc0b955ca4c4ada07feac0d18a1d8f7232d64b6f654c405669419f92d
 
 # Dia chi (RVA) trong GameAssembly.dll goc - lay tu il2cpp dump va disassembly.
 GAME_SYMBOLS = {
+    "unity_debug_log": 0x661DF0,
+    "bg_zj": 0x276400,
+    "bk_bad": 0x276D50,
+    "diag_rx_back": 0x200DD7,
+    "lj_cor": 0x23AA80,
+    "hw_cdt": 0x360AE0,
     "mo_dgd": 0x1B56B0,
     "mo_dga": 0x1B3DD0,
     "mo_dgf": 0x1B5A10,
@@ -489,6 +495,10 @@ def build(original_path, ml64, cl):
         (SHOP_DHN, "4883EC28", "B001C3CC"),     # mov al, 1 ; ret
         # mo.dhe (bam nut thanh Top): id nut cua mod -> mod_top_click
         (0x1C7870, "48895C2418", jmp(0x1C7870, 5, S["dhe_hook"])),
+        # Observe the tail call into the original send queues, preserving the original send.
+        (0x43A6A8, "E953BDE3FF", jmp(0x43A6A8, 5, S["diag_bg_send"])),
+        (0x43C334, "E917AAE3FF", jmp(0x43C334, 5, S["diag_bk_send"])),
+        (0x200DD0, "488BC448895010", jmp(0x200DD0, 7, S["diag_rx_hook"])),
     ]
     for rva, o, p in hooks:
         ob, pb = bytes.fromhex(o), bytes.fromhex(p)

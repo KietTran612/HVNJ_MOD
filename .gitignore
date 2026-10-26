@@ -6,6 +6,7 @@ tools/
 *.bak
 *.log
 __pycache__/
+.diag-tmp/
 *.pyc
 .system_generated/
 

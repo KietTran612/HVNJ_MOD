@@ -10,8 +10,8 @@
  *  - Dong "Xem truoc trang bi se ban" mo menu thu hai liet ke mon se ban / giu
  *    (hvnj_bag.c), dong thoi lay so dong ban shop con thieu (khong ban gi).
  *  - Dong "Mo ruong do" / "Mo nang cap trang bi": mo bang cua game o bat ky map
- *    nao bang mo.djd(loai) - ham game goi khi server bao mo bang sau khi noi
- *    chuyen voi NPC (va tu goi cho nut Auto tren thanh Top).
+ *    nao qua service_open: NPC5/6 -> menu(0,0) -> cho server cmd30 mo bang.
+ *    Khong goi mo.djd de gia lap thanh cong khi server chua chap nhan.
  *
  *  Quy uoc: khong dung CRT, khong co bang con tro (dia chi tuyet doi bi cam
  *  vi ASLR), moi doi tuong managed tao qua ham cua game / runtime IL2CPP.
@@ -36,6 +36,8 @@ extern void ms_dla(void* ms, void* list, int pos, int isNpc, int isTask, int isT
 extern Il2CppString* prefs_get_string(Il2CppString* key, void* method);
 extern void* mo_ddt(void* method);                                   /* GameScr (mo) hien tai */
 extern void mo_djd(void* mo, int typeUI, void* method);              /* mo bang theo loai     */
+extern void diag_ui(int type);
+extern void service_open(int type);
 
 /* nut tren thanh Top (duoi nut Shop) - cung cach game tao nut Shop trong mo.dhp */
 extern void* unity_component_gameobject(void* comp, void* method);  /* Component.gameObject  */
@@ -449,7 +451,11 @@ void mod_top_buttons(void* mo, long long now)
 /* Bam nut cua mod (dhe_hook nhay toi tu dau mo.dhe: rcx = mo, edx = id). */
 void mod_top_click(void* mo, int id)
 {
-    if (mo) mo_djd(mo, id == TOP_BTN_BASE ? UI_BOX : UI_UPGRADE, 0);
+    if (mo) {
+        int type = id == TOP_BTN_BASE ? UI_BOX : UI_UPGRADE;
+        diag_ui(type);
+        service_open(type);
+    }
 }
 
 /* Them dong "Mod HVNJ" vao menu nhan vat (list do mo.doMenuChar vua dung). */
@@ -489,7 +495,11 @@ int mod_action(int action)
         return 1;
     } else if (i == ACT_OPEN_BOX || i == ACT_OPEN_UP) {
         void* mo = mo_ddt(0);
-        if (mo) mo_djd(mo, i == ACT_OPEN_BOX ? UI_BOX : UI_UPGRADE, 0);
+        if (mo) {
+            int type = i == ACT_OPEN_BOX ? UI_BOX : UI_UPGRADE;
+            diag_ui(type);
+            service_open(type);
+        }
         return 1;
     }
     if (i != ACT_OPEN) cfg_save();

@@ -55,6 +55,10 @@ EXTERN mod_menu_add_entry:PROC  ; void mod_menu_add_entry(List<iw>* list) - them
 EXTERN bag_tick:PROC            ; int bag_tick(long long now) - phien don hanh trang (hvnj_bag.c)
 EXTERN mod_top_buttons:PROC     ; void mod_top_buttons(mo, long long now) - tao nut Ruong / Nang cap
 EXTERN mod_top_click:PROC       ; void mod_top_click(mo, int id) - bam nut cua mod tren thanh Top
+EXTERN diag_packet:PROC
+EXTERN diag_rx_back:PROC
+EXTERN service_receive:PROC
+EXTERN service_tick:PROC
 
 ; ---- Con tro TypeInfo (Il2CppClass*), static fields o +0B8h -----------------
 EXTERN ca_TypeInfo:QWORD        ; ca.fxf (+16h) = trang thai nut Auto
@@ -95,6 +99,7 @@ PUBLIC ctq_cd1, ctq_cd1_end, ctq_cd2, ctq_cd2_end, cdy_dlg, cdy_dlg_end, cdq_dlg
 PUBLIC dek_trial, dek_trial_end, bld_trial, bld_trial_end, dgj_core1, dgj_core1_end, dgj_core2, dgj_core2_end
 PUBLIC quest_tick, party_leader, party_tick, die_tick, stone_tick, action_hook, menuchar_hook, dhe_hook
 PUBLIC cfg_block, cfg_mob, cfg_stage, cfg_quest, cfg_accept, cfg_party, cfg_die, cfg_stone
+PUBLIC diag_rx_hook
 PUBLIC cfg_stone_lo, cfg_stone_hi, cfg_tathu, cfg_trial, cfg_sell, m_loaded
 PUBLIC q_engaged, r_pending, r_active, p_active, st_party_map, st_empty_since, s_active, s_wait_until, s_fails
 
@@ -688,6 +693,10 @@ q_no_die:
     mov     ecx, 10000
     div     rcx
     mov     r12, rax                    ; bay gio (ms)
+    mov     rcx, r12
+    call    service_tick
+    test    eax, eax
+    jnz     q_exit                     ; one NPC handshake at a time; pause mod jobs
     mov     rcx, rbx
     mov     rdx, r12
     call    mod_top_buttons             ; nut Ruong / Nang cap duoi nut Shop (tao 1 lan)
@@ -1875,6 +1884,36 @@ menuchar_hook PROC FRAME
     add     rsp, 28h
     ret
 menuchar_hook ENDP
+
+; Observe incoming packets BEFORE the reader advances. Replay the two original
+; entry instructions with the original rsp; all function arguments are restored.
+ALIGN 16
+diag_rx_hook PROC FRAME
+    sub rsp, 38h
+    .allocstack 38h
+    .endprolog
+    mov [rsp+20h], rcx
+    mov [rsp+28h], rdx
+    mov [rsp+30h], r8
+    xor ecx, ecx
+    call diag_packet
+    nop
+    mov rcx, [rsp+28h]
+    call service_receive
+    nop
+    test eax, eax
+    jnz rx_consumed
+    mov rcx, [rsp+20h]
+    mov rdx, [rsp+28h]
+    mov r8, [rsp+30h]
+    add rsp, 38h
+    mov rax, rsp
+    mov [rax+10h], rdx
+    jmp diag_rx_back
+rx_consumed:
+    add rsp, 38h
+    ret
+diag_rx_hook ENDP
 
 ; ---- hang so chi doc --------------------------------------------------------
 ALIGN 16
