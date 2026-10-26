@@ -8,10 +8,10 @@ int main(){
     assert(!p.external(110)); // manual NPC request cannot interleave
     assert(!p.start(10,120));
     assert(!p.receive(30,4,130)); // wrong order cannot finish request
-    assert(p.receive(40,-1,200)); // handshake is consumed by mod
-    assert(p.phase==HvProtocol::SEND);
-    assert(!p.tick(210)); assert(p.phase==HvProtocol::PANEL);
-    assert(!p.receive(30,10,220)); assert(p.phase==HvProtocol::PANEL);
+    assert(!p.receive(40,-1,200)); // original client must render NPC options
+    assert(p.phase==HvProtocol::IDLE);
+    assert(!p.tick(210)); assert(p.phase==HvProtocol::IDLE); // no automatic menu packet
+    assert(p.external(220)); // user may select any native option immediately
     assert(!p.receive(30,4,230)); assert(p.phase==HvProtocol::IDLE);
     assert(p.external(240)); assert(!p.start(10,250)); // reverse ordering
     p.receive(40,-1,260); assert(p.start(10,270));

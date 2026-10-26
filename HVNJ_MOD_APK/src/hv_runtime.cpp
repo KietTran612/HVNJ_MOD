@@ -1,4 +1,5 @@
 #include "hv_runtime.h"
+#include "hv_field_write.h"
 #include "hv_log_file.h"
 #include <android/log.h>
 #include <dlfcn.h>
@@ -19,6 +20,7 @@ struct Api {
     void** (*domain_get_assemblies)(void*, size_t*);
     void* (*assembly_get_image)(void*);
     void* (*class_from_name)(void*, const char*, const char*);
+    void* (*class_from_type)(void*);
     void* (*class_get_parent)(void*);
     void* (*class_get_type)(void*);
     void* (*class_get_field_from_name)(void*, const char*);
@@ -41,6 +43,9 @@ struct Api {
     int (*string_length)(void*);
     void* (*array_new)(void*, size_t);
     void (*gc_wbarrier_set_field)(void*, void**, void*);
+    uintptr_t (*gchandle_new)(void*,bool);
+    void* (*gchandle_get_target)(uintptr_t);
+    void (*gchandle_free)(uintptr_t);
     void* (*thread_attach)(void*);
     void (*thread_detach)(void*);
 } a{};
@@ -86,8 +91,11 @@ int kind(const char* cls, const char* name) {
 }
 
 bool hv_runtime_init(void* lib) {
+    // Must run inside an original managed callback after Unity has initialized.
+    // il2cpp_domain_get is a lazy allocator, not a safe native-worker readiness test.
 #define LOAD(name) a.name = reinterpret_cast<decltype(a.name)>(dlsym(lib, "il2cpp_" #name)); if (!a.name) { hv_log("missing export il2cpp_%s", #name); return false; }
-    LOAD(domain_get); LOAD(domain_get_assemblies); LOAD(assembly_get_image); LOAD(class_from_name);
+    LOAD(domain_get); LOAD(domain_get_assemblies); LOAD(assembly_get_image); LOAD(class_from_name); LOAD(class_from_type);
+    LOAD(gchandle_new); LOAD(gchandle_get_target); LOAD(gchandle_free);
     LOAD(class_get_parent); LOAD(class_get_type); LOAD(class_get_field_from_name); LOAD(class_get_method_from_name);
     LOAD(object_get_class); LOAD(class_get_name); LOAD(field_get_type); LOAD(type_get_type); LOAD(field_get_flags);
     LOAD(field_get_value); LOAD(field_set_value); LOAD(field_static_get_value); LOAD(field_static_set_value);
@@ -134,9 +142,11 @@ int64_t hv_int(void* o, const char* c, const char* f) {
 }
 float hv_float(void* o,const char* c,const char* f) { float v=0; read(o,c,f,&v); return v; }
 bool hv_bool(void* o,const char* c,const char* f) { return hv_int(o,c,f)!=0; }
-bool hv_set_obj(void* o,const char* c,const char* f,void* v) { return write(o,c,f,&v); }
-bool hv_set_int(void* o,const char* c,const char* f,int64_t v) { return write(o,c,f,&v); }
-bool hv_set_float(void* o,const char* c,const char* f,float v) { return write(o,c,f,&v); }
+// IL2CPP SetValueRaw(w3=0) takes reference objects directly; only primitives
+// take an address. Passing &v stores a dangling native-stack pointer in the GC heap.
+bool hv_set_obj(void* o,const char* c,const char* f,void* v) { return write(o,c,f,HvFieldWrite::reference(v).argument); }
+bool hv_set_int(void* o,const char* c,const char* f,int64_t v) { return write(o,c,f,HvFieldWrite::primitive(v).argument); }
+bool hv_set_float(void* o,const char* c,const char* f,float v) { return write(o,c,f,HvFieldWrite::primitive(v).argument); }
 bool hv_has_method(const char* c,const char* n,int argc) {
     void* k=hv_class(c); return k && a.class_get_method_from_name(k,n,argc);
 }
@@ -161,6 +171,22 @@ void* hv_new(const char* cls) {
     if (o && a.class_get_method_from_name(k,".ctor",0)) hv_call(o,cls,".ctor");
     return o;
 }
+void* hv_new_field_object(const char* owner,const char* name){
+    hv_log("MENU allocate field %s.%s",owner,name);
+    void* f=field(owner,name);if(!f)return nullptr;
+    hv_log("MENU field resolved");
+    void* k=a.class_from_type(a.field_get_type(f));if(!k)return nullptr;
+    hv_log("MENU field class resolved");
+    a.runtime_class_init(k);void* o=a.object_new(k);if(!o)return nullptr;
+    hv_log("MENU field object allocated");
+    void* ctor=a.class_get_method_from_name(k,".ctor",0);void* ex=nullptr;
+    if(ctor)a.runtime_invoke(ctor,o,nullptr,&ex);
+    if(ex){hv_log("field object constructor failed %s.%s",owner,name);return nullptr;}
+    return o;
+}
+uintptr_t hv_hold(void* o){return o?a.gchandle_new(o,false):0;}
+void* hv_held(uintptr_t h){return h?a.gchandle_get_target(h):nullptr;}
+void hv_release(uintptr_t h){if(h)a.gchandle_free(h);}
 void* hv_string(const char* s) { return ready ? a.string_new(s?s:"") : nullptr; }
 const char* hv_utf8(void* o) {
     static thread_local std::string out; out.clear(); if (!o) return "";
@@ -182,6 +208,11 @@ bool hv_array_set(void* o,size_t i,void* v) {if(i>=hv_array_count(o))return fals
 int64_t hv_array_int(void* o,size_t i,int bytes) {
     if(i>=hv_array_count(o))return 0;char* p=static_cast<char*>(o)+32+i*bytes;
     switch(bytes){case 1:return *reinterpret_cast<int8_t*>(p);case 2:return *reinterpret_cast<int16_t*>(p);case 4:return *reinterpret_cast<int32_t*>(p);case 8:return *reinterpret_cast<int64_t*>(p);default:return 0;}
+}
+bool hv_array_set_int(void* o,size_t i,int bytes,int64_t value){
+    if(i>=hv_array_count(o))return false;char* p=static_cast<char*>(o)+32+i*bytes;
+    switch(bytes){case 1:*reinterpret_cast<int8_t*>(p)=(int8_t)value;break;case 2:*reinterpret_cast<int16_t*>(p)=(int16_t)value;break;case 4:*reinterpret_cast<int32_t*>(p)=(int32_t)value;break;case 8:*reinterpret_cast<int64_t*>(p)=value;break;default:return false;}
+    return true;
 }
 size_t hv_list_count(void* o) {if(!o)return 0;int v=0;void* f=a.class_get_field_from_name(a.object_get_class(o),"_size");if(f)a.field_get_value(o,f,&v);return v>=0&&v<=65536?static_cast<size_t>(v):0;}
 void* hv_list_at(void* o,size_t i) {if(i>=hv_list_count(o))return nullptr;void* ar=nullptr;void* f=a.class_get_field_from_name(a.object_get_class(o),"_items");if(f)a.field_get_value(o,f,&ar);return hv_array_at(ar,i);}
@@ -208,12 +239,13 @@ void hv_log_start_file(){
     auto& log=logs();
     {std::lock_guard<std::mutex> lock(log.lock);log.opened=log.file.open(dir+"/hvnj-mod.log");
      if(log.opened){for(const auto& s:log.early)log.file.write(s.c_str());log.early.clear();}}
-    hv_log("FILE_LOG %s build=185-arm64-log-v1",log.opened?"enabled":"open failed");
+    hv_log("FILE_LOG %s build=185-arm64-log-v5",log.opened?"enabled":"open failed");
 }
 void hv_notice(const char* s) {void* args[]={hv_string(s)};hv_call(nullptr,"GameCanvas","startOKDlg",1,args);}
 
 // Generic managed List<T> factory from the current MenuG4M list's actual class.
 void* hv_clone_empty_list(void* example) {
+    hv_log("MENU clone list begin");
     if(!example)return nullptr;void* k=a.object_get_class(example);void* o=a.object_new(k);
     void* m=a.class_get_method_from_name(k,".ctor",0);void* ex=nullptr;
     if(m)a.runtime_invoke(m,o,nullptr,&ex);return ex?nullptr:o;

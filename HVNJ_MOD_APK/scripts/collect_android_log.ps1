@@ -39,6 +39,6 @@ foreach ($name in @('hvnj-mod.log','hvnj-mod.log.previous')) {
     if ($LASTEXITCODE -ne 0) {Write-Warning "Cannot pull $name; logcat capture is still saved."}
   }
 }
-"Build marker: 185-arm64-log-v1`r`nCaptured locally. No upload performed." | Set-Content -Encoding UTF8 (Join-Path $out 'capture-info.txt')
+"Build marker: 185-arm64-log-v5`r`nCaptured locally. No upload performed." | Set-Content -Encoding UTF8 (Join-Path $out 'capture-info.txt')
 Write-Host "Log folder: $out"
 Write-Host 'Tell Codex that capture is finished; these files are in the project logs folder.'

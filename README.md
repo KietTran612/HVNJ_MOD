@@ -10,7 +10,16 @@ Bản mod cho game **Học Viện Ninja (HVNJ 186 by G4M Studio)** bản PC x64 
 
 ---
 
-## Tiến độ hiện tại — 26/10/2026
+## Tiến độ Android ARM64 — 26/10/2026
+
+Đang port9 tính năng PC sang APK Android1.8.5 trong `HVNJ_MOD_APK/`. Bàn giao đầy đủ: **[README Android](HVNJ_MOD_APK/README.md)**.
+
+- Đã build/ký APK ARM64, cài và vào map160 trên ASUS Android14 qua ADB Wi-Fi; logcat/file log hoạt động.
+- Đã thử nút nổi và **MENU → Mod HVNJ**, bật/tắt một cờ, cuộn danh sách và mở preview. Chưa kiểm chứng đủ9 hành vi thực tế.
+- Đang sửa Rương/Nâng cấp theo luồng mở menu NPC gốc để người dùng tự chọn option. Đã xử lý mã GC handle64bit và menu bị neo ngoài màn hình; cần kiểm thử bản mới. Shop chưa sửa.
+- Những lỗi đã gặp, bằng chứng, bản APK hiện tại và bước cần làm tiếp nằm trong README Android. Lỗi mất kết nối đăng nhập trước đó chưa có nguyên nhân kết luận.
+
+## Tiến độ PC — 26/10/2026
 
 **Đang tập trung sửa hai nút Rương và Nâng cấp. Chưa chuyển sang sửa Shop.**
 

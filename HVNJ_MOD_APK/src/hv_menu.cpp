@@ -29,9 +29,9 @@ void save(){
     hv_call(nullptr,"UnityEngine.PlayerPrefs","Save");
 }
 void* fresh_list(){
-    void* m=menu();if(!m)return nullptr;void* example=hv_obj(m,"MenuG4M","listMenu");
-    if(!example){building=true;hv_call(hv_map_scr(),"MapScr","doMenuChar");building=false;example=hv_obj(m,"MenuG4M","listMenu");}
-    void* list=hv_clone_empty_list(example);
+    void* m=menu();hv_log("MENU instance resolved=%d",m!=nullptr);if(!m)return nullptr;void* example=hv_obj(m,"MenuG4M","listMenu");
+    hv_log("MENU existing list=%d",example!=nullptr);
+    void* list=example?hv_clone_empty_list(example):hv_new_field_object("MenuG4M","listMenu");
     if(list)hv_set_obj(m,"MenuG4M","listMenu",list); // strong managed root while building
     return list;
 }
@@ -67,17 +67,52 @@ void hv_menu_show(){
     if(hv_cfg.stone_hi){std::snprintf(b,sizeof(b),"Luyện đá từ cấp %d",hv_cfg.stone_lo);add(list,b,BASE+11);}
     std::snprintf(b,sizeof(b),"Option nhận nhiệm vụ: %d",hv_cfg.accept_option);add(list,b,BASE+12);
     add(list,"Mở rương đồ",BASE+15);add(list,"Mở nâng cấp trang bị",BASE+16);add(list,"Đóng",BASE+13);present(list);
+    hv_log("MENU ready rows=%zu toggles=9",hv_list_count(list));
 }
 void hv_menu_append(){
     if(building)return;void* list=hv_obj(menu(),"MenuG4M","listMenu");if(!list)return;
     for(size_t i=0;i<hv_list_count(list);++i)if(hv_int(hv_list_at(list,i),"CommandGame","idAction")==BASE)return;
     add(list,"Mod HVNJ",BASE);present(list);
 }
+void hv_menu_extend_main(void* list,int type){
+    if(!list||(type!=3&&type!=5))return;
+    size_t count=hv_list_count(list);if(count==0||count>=120)return;
+    for(size_t i=0;i<count;++i)if(hv_int(hv_list_at(list,i),"CommandGame","idAction")==BASE)return;
+    // Native initUI uses INDEX_ICON for both sprites and mText labels, ignoring captions.
+    void* icons=hv_obj(nullptr,"MenuLeftG4M","INDEX_ICON");void* row=hv_array_at(icons,(size_t)type);
+    size_t old=hv_array_count(row);if(!old)return;
+    void* sprites=hv_obj(nullptr,"LoadData","sprIconMenuLeft");
+    void* names=hv_obj(nullptr,"mText","nameMenuLeft");
+    size_t sprite_count=hv_array_count(sprites),name_count=hv_array_count(names);
+    static int custom_index=-1;
+    if(custom_index<0||!hv_array_at(sprites,(size_t)custom_index)||
+       (size_t)custom_index>=name_count||std::strcmp(hv_utf8(hv_array_at(names,(size_t)custom_index)),"Mod HVNJ")){
+        size_t index=sprite_count>name_count?sprite_count:name_count;
+        int source=(int)hv_array_int(row,0,1);
+        if(index>=128||source<0||!hv_array_at(sprites,(size_t)source))return;
+        void* extended=hv_new_array("UnityEngine.Sprite",index+1);if(!extended)return;
+        for(size_t i=0;i<sprite_count;++i)if(!hv_array_set(extended,i,hv_array_at(sprites,i)))return;
+        if(!hv_array_set(extended,index,hv_array_at(sprites,(size_t)source)))return;
+        // Publish each completed array before allocating the next managed object.
+        if(!hv_set_obj(nullptr,"LoadData","sprIconMenuLeft",extended))return;
+        extended=hv_new_array("System.String",index+1);if(!extended)return;
+        for(size_t i=0;i<name_count;++i)if(!hv_array_set(extended,i,hv_array_at(names,i)))return;
+        if(!hv_array_set(extended,index,hv_string("Mod HVNJ")))return;
+        if(!hv_set_obj(nullptr,"mText","nameMenuLeft",extended))return;
+        custom_index=(int)index;
+    }
+    size_t size=old>count?old:count+1;
+    void* extended=hv_new_array("System.SByte",size);if(!extended)return;
+    for(size_t i=0;i<size;++i)hv_array_set_int(extended,i,1,hv_array_int(row,i<old?i:0,1));
+    if(!hv_array_set_int(extended,count,1,custom_index)||!hv_array_set(icons,(size_t)type,extended))return;
+    add(list,"Mod HVNJ",BASE);hv_log("MENU main entry appended rows=%zu type=%d",hv_list_count(list),type);
+}
 bool hv_menu_action(void* command){
     int id=static_cast<int>(hv_int(command,"CommandGame","idAction"))-BASE;
     if(id<0||id>16)return false;
     hv_log("MENU action=%d map=%d",id,hv_map_id());
     hv_call(menu(),"MenuG4M","closeM");
+    hv_call(hv_call(nullptr,"MenuLeftG4M","gI"),"MenuLeftG4M","closeM");
     if(id>=1&&id<=9){int f=id-1;hv_cfg.enabled[f]=!hv_cfg.enabled[f];hv_features_reset(f);if(f==HV_SELL||f==HV_STONE)hv_bag_reset();save();}
     else if(id==10){hv_cfg.stone_hi=hv_cfg.stone_hi?hv_cfg.stone_hi+1:2;if(hv_cfg.stone_hi>12)hv_cfg.stone_hi=0;if(hv_cfg.stone_hi&&hv_cfg.stone_lo>=hv_cfg.stone_hi)hv_cfg.stone_lo=1;hv_bag_reset();save();}
     else if(id==11){if(hv_cfg.stone_hi){++hv_cfg.stone_lo;if(hv_cfg.stone_lo>=hv_cfg.stone_hi)hv_cfg.stone_lo=1;}hv_bag_reset();save();}
@@ -98,9 +133,14 @@ void hv_menu_gui(){
     int width=static_cast<int>(hv_unbox_int(hv_call(nullptr,"UnityEngine.Screen","get_width")));
     if(width<200)return;
     float scale=width/1280.0f;if(scale<0.75f)scale=0.75f;if(scale>2.5f)scale=2.5f;
+    // Scale the retained font without relying on a stripped GUIStyle setter.
+    void* matrix=hv_call(nullptr,"UnityEngine.GUI","get_matrix");float saved[16]{},zoomed[16]{};
+    float zoom=scale*1.4f;
+    for(int col=0;col<4;++col)for(int row=0;row<4;++row){char f[4]={'m',char('0'+row),char('0'+col),0};saved[col*4+row]=hv_float(matrix,"UnityEngine.Matrix4x4",f);zoomed[col*4+row]=saved[col*4+row]*(col<2?zoom:1.f);}
+    if(matrix){void* ma[]={zoomed};hv_call(nullptr,"UnityEngine.GUI","set_matrix",1,ma);}else zoom=1.f;
     const char* names[]={"Mod HVNJ","Rương","Nâng cấp"};
     for(int i=0;i<3;++i){
-        struct Rect{float x,y,w,h;} r{width-(330.0f-i*110)*scale,74.0f*scale,106.0f*scale,45.0f*scale};
+        struct Rect{float x,y,w,h;} r{(320.f+i*110)*scale/zoom,74.0f*scale/zoom,106.0f*scale/zoom,45.0f*scale/zoom};
         void* content=hv_new("UnityEngine.GUIContent");if(!content)continue;
         void* t=hv_string(names[i]);void* ta[]={t};hv_call(content,"UnityEngine.GUIContent","set_text",1,ta);
         void* args[]={&r,content};
@@ -108,4 +148,5 @@ void hv_menu_gui(){
             if(i==0)hv_menu_show();else hv_service_open(i==1?4:10);
         }
     }
+    if(matrix){void* ma[]={saved};hv_call(nullptr,"UnityEngine.GUI","set_matrix",1,ma);}
 }

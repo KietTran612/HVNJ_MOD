@@ -31,6 +31,10 @@ void* hv_call(void* obj, const char* cls, const char* method, int argc = 0, void
 bool hv_has_method(const char* cls, const char* method, int argc);
 int64_t hv_unbox_int(void* boxed);
 void* hv_new(const char* cls);
+void* hv_new_field_object(const char* owner,const char* field);
+uintptr_t hv_hold(void* object);
+void* hv_held(uintptr_t handle);
+void hv_release(uintptr_t handle);
 void* hv_string(const char* utf8);
 const char* hv_utf8(void* managed_string); // main-thread scratch; copy if retained
 void* hv_new_array(const char* element_class, size_t count);
@@ -38,6 +42,7 @@ size_t hv_array_count(void* array);
 void* hv_array_at(void* array, size_t index);
 bool hv_array_set(void* array, size_t index, void* managed_reference);
 int64_t hv_array_int(void* array, size_t index, int element_bytes);
+bool hv_array_set_int(void* array,size_t index,int element_bytes,int64_t value);
 size_t hv_list_count(void* list);
 void* hv_list_at(void* list, size_t index);
 void* hv_self();

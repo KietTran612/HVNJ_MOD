@@ -19,6 +19,10 @@ HOOKS = {
     "GlobalMessage": {"onMessage"},
     "Main": {"OnGUI"},
     "Service": {"openMenu", "menu", "itemBagToBox", "itemBoxToBag", "upgradeItem", "buyItem", "sellItem", "crystalCollectLock"},
+    "Session_ME": {"doConnect", "close"},
+    "ServiceSDK": {"loginG4M"},
+    "MenuLeftG4M": {"startAt"},
+    "MenuG4M": {"initUI"},
 }
 
 
