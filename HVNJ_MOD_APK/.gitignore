@@ -1,0 +1,12 @@
+*.apk
+analysis/
+tools/
+third_party/
+build/
+output/
+keys/
+__pycache__/
+*.log
+*.obj
+*.exe
+logs/
